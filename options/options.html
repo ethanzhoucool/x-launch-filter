@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>X Launch Filter — settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="mark">&#9661;</div>
+        <div>
+          <h1>X Launch Filter</h1>
+          <div class="sub" id="lockstate">checking&hellip;</div>
+        </div>
+      </header>
+
+      <div class="notice" id="notice" hidden>
+        Settings are read-only while the filter is on. Turning the view floor
+        down would be an unlock with none of the friction, so it takes the same
+        route: open the extension popup and run the unlock steps.
+      </div>
+
+      <section>
+        <h2>The bar</h2>
+        <label class="field">
+          <span>Minimum views</span>
+          <select id="minViews">
+            <option value="10000">10k</option>
+            <option value="25000">25k</option>
+            <option value="50000">50k</option>
+            <option value="100000">100k</option>
+            <option value="250000">250k</option>
+            <option value="500000">500k</option>
+          </select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="requireLaunch" />
+          <span>
+            Also require launch/product signals
+            <em
+              >Scored: a launch keyword is worth 2, native video 1, a link card
+              1, a photo 0.5. A post needs 2 to get through — so a keyword
+              alone passes, and so does a wordless demo video that links to the
+              product.</em
+            >
+          </span>
+        </label>
+      </section>
+
+      <section>
+        <h2>What else to drop</h2>
+        <label class="check">
+          <input type="checkbox" id="hideAds" /><span>Promoted posts</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="hideReplies" /><span>Replies</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="hideReposts" /><span>Reposts</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="blockExplore" /><span
+            >Block Explore and Trending entirely</span
+          >
+        </label>
+      </section>
+
+      <section>
+        <h2>Where it applies</h2>
+        <p class="hint">
+          The home timeline is always filtered. Search is left alone by default
+          — searching is the deliberate behaviour this is trying to push you
+          back toward.
+        </p>
+        <label class="check">
+          <input type="checkbox" id="filterSearch" /><span
+            >Also filter search results</span
+          >
+        </label>
+        <label class="check">
+          <input type="checkbox" id="filterProfiles" /><span
+            >Also filter profile timelines</span
+          >
+        </label>
+        <label class="check">
+          <input type="checkbox" id="showHud" /><span
+            >Show the counter in the corner</span
+          >
+        </label>
+      </section>
+
+      <section>
+        <h2>Your keywords</h2>
+        <p class="hint">
+          One per line, or comma separated. These add to the built-in lists
+          rather than replacing them.
+        </p>
+        <label class="field col">
+          <span>Always treat as launch content</span>
+          <textarea id="extraInclude" rows="4" placeholder="e.g.&#10;design engineer&#10;figma plugin"></textarea>
+        </label>
+        <label class="field col">
+          <span>Always drop</span>
+          <textarea id="extraExclude" rows="4" placeholder="e.g.&#10;hiring&#10;thread 🧵"></textarea>
+        </label>
+      </section>
+
+      <section>
+        <h2>Built-in lists</h2>
+        <details>
+          <summary id="sum-include">Launch signals</summary>
+          <div class="chips" id="list-include"></div>
+        </details>
+        <details>
+          <summary id="sum-exclude">Always dropped</summary>
+          <div class="chips" id="list-exclude"></div>
+        </details>
+      </section>
+
+      <footer><span id="saved"></span></footer>
+    </div>
+
+    <script src="../src/scoring.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
