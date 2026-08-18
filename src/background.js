@@ -7,6 +7,7 @@ const DEFAULTS = {
   minViews: 50000,
   minLikeRate: 0,
   minBookmarkRate: 0,
+  minPerPage: 3,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,

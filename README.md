@@ -158,11 +158,23 @@ filter kept 5 posts out of 35 judged, and with the launch-keyword requirement on
 top it has kept as few as 1 out of 21. An empty column is a real outcome, not a
 bug. Lower the view floor in settings.
 
-**No page top-up yet.** When a page of 20 posts yields one keeper, the extension
-returns one post and waits for X to ask for more. Because the rendered page is
-genuinely short, X's own "load more" trigger should fire on its own — but the
-extension does not yet follow the bottom cursor to fetch and merge extra pages
-itself, which would guarantee a full screen instead of relying on that.
+**A filtered page can stop X paginating, so a few rejects are let through.**
+X's "load more" is driven by rendered content, so a page filtered down to
+nothing is a dead end. Measured: with an empty timeline, scrolling to the bottom
+eight times produced zero further timeline requests — the feed simply ends.
+
+The current guard is a floor. When a page would leave fewer than `minPerPage`
+posts (default 3), the highest-view rejects go back in so there is something to
+scroll and X keeps asking for more. That means a starved page shows a few posts
+below your bar. Set it to 0 to turn the net off and accept the dead end.
+
+The better fix is a top-up: follow the bottom cursor, fetch and filter more
+pages, and merge before handing anything back. That was built and reverted. It
+needs the extension to complete X's request itself rather than filter on read,
+and X's client rejected the synthesized completion with "Something went wrong."
+The header replay it depends on does work — replaying X's own signed headers on
+a cursor URL returns 200 with a further cursor — so the idea is sound and the
+delivery is what needs solving.
 
 **The config bridge has a startup race.** Settings reach the page world through
 a `data-xlf` attribute written by the isolated content script, whose storage

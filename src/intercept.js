@@ -4,9 +4,14 @@
 // Why here and not in the DOM: X's timeline is virtualised, and every post's
 // position is a coordinate cached at mount. Hiding a rendered post does not
 // reflow the list, so it leaves a permanent hole, and the reserved scroll space
-// never shrinks. Deleting the post from the response sidesteps all of that —
-// X lays out a shorter timeline that is correct by construction, and its own
-// "load more" trigger starts working again because the page really is short.
+// never shrinks. Deleting the post from the response sidesteps all of that:
+// X lays out a shorter timeline that is correct by construction.
+//
+// What it does NOT fix, measured the hard way: X's pagination is driven by
+// rendered content, so a page filtered down to nothing is a dead end. With an
+// empty timeline, scrolling to the bottom eight times produced zero further
+// requests. Hence the minPerPage floor below — a few of the strongest rejects
+// go back in so there is something to scroll and X keeps asking for more.
 //
 // Verified against a live HomeTimeline response: transport is XHR, the request
 // is a GET, and entries live at
@@ -70,7 +75,7 @@
     if (single) {
       const promoted = !!content.itemContent?.promotedMetadata;
       const v = self.XLF.judge(self.XLF.fromApi(single, { promoted }), cfg);
-      return { keep: v.keep, judged: 1, reason: v.reason };
+      return { keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0 };
     }
 
     // A conversation module is a post plus its replies. Judge the root and take
@@ -81,7 +86,7 @@
         if (!r) continue;
         const promoted = !!it.item.itemContent.promotedMetadata;
         const v = self.XLF.judge(self.XLF.fromApi(r, { promoted }), cfg);
-        return { keep: v.keep, judged: 1, reason: v.reason };
+        return { keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0 };
       }
     }
 
@@ -110,12 +115,35 @@
           // Filter in place, back to front. Do not descend: nested tweets are
           // quoted posts and thread replies, which belong to their parent's
           // verdict, not their own.
+          const cut = [];
+          let survivors = 0;
           for (let i = node.length - 1; i >= 0; i--) {
             const v = entryVerdict(node[i], cfg);
             judged += v.judged;
             if (!v.keep) {
               dropped++;
+              cut.push({ at: i, entry: node[i], views: v.views || 0 });
               node.splice(i, 1);
+            } else if (v.judged) {
+              survivors++;
+            }
+          }
+
+          // X's pagination is driven by rendered content, so a page filtered to
+          // nothing is a dead end — measured: with an empty timeline, scrolling
+          // to the bottom eight times produced zero further requests. Rather
+          // than let the feed stop, put the strongest few rejects back so there
+          // is something to scroll and X keeps asking for more.
+          const floor = Math.max(0, cfg.minPerPage ?? 3);
+          if (judged && survivors < floor && cut.length) {
+            const rescued = cut
+              .filter((c) => c.views > 0)
+              .sort((a, b) => b.views - a.views)
+              .slice(0, floor - survivors)
+              .sort((a, b) => a.at - b.at);
+            for (const r of rescued) {
+              node.splice(Math.min(r.at, node.length), 0, r.entry);
+              dropped--;
             }
           }
           return;

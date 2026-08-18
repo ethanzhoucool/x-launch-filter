@@ -19,6 +19,9 @@ self.XLF = (() => {
     // these default off — stacking them with a high view floor empties the feed.
     minLikeRate: 0,
     minBookmarkRate: 0,
+    // A page filtered to nothing stops X paginating, so keep at least this many
+    // posts even when they miss the bar. 0 disables the safety net.
+    minPerPage: 3,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,
@@ -161,13 +164,21 @@ self.XLF = (() => {
   // counts live on .legacy, and TweetWithVisibilityResults wraps the real tweet
   // one level deeper.
   function fromApi(result, opts = {}) {
-    const t = result?.tweet || result;
+    const outer = result?.tweet || result;
+    const isRepost = !!outer?.legacy?.retweeted_status_result;
+
+    // A repost's own wrapper carries zero counts and a truncated "RT @user: …"
+    // body, so judging it drops every repost regardless of the hideReposts
+    // setting. Judge the post being shared instead.
+    const shared = outer?.legacy?.retweeted_status_result?.result;
+    const t = shared ? shared.tweet || shared : outer;
+
     const legacy = t?.legacy;
     if (!legacy) return null;
 
     // Long posts truncate full_text; note_tweet carries the whole thing.
     const note = t.note_tweet?.note_tweet_results?.result?.text;
-    const card = result?.card || t?.card;
+    const card = t?.card || result?.card;
     const cardText = card
       ? (card.legacy?.binding_values || [])
           .filter((b) => b.key === "title" || b.key === "description")
@@ -186,7 +197,7 @@ self.XLF = (() => {
       hasPhoto: media.some((m) => m.type === "photo"),
       hasCard: !!card,
       isReply: !!legacy.in_reply_to_status_id_str,
-      isRepost: !!legacy.retweeted_status_result,
+      isRepost,
       isAd: !!opts.promoted,
     };
   }
@@ -195,15 +206,23 @@ self.XLF = (() => {
 
   // The engagement bar's aria-label carries exact counts, e.g.
   // "7 replies, 15 likes, 1 bookmark, 396 views".
+  // Two passes, because the two number formats need different character
+  // classes. Abbreviated counts ("1.2M views") use a decimal point; exact ones
+  // ("45,201 views") are comma-grouped, and a single pattern that allows both
+  // will happily match the last group of an exact count and read 45,201 as 201.
   function parseCount(label, noun) {
     if (!label) return null;
-    const re = new RegExp(`([\\d.]+)\\s*([KMB])?\\s+${noun}s?\\b`, "i");
-    const m = re.exec(label);
-    if (!m) return null;
-    if (m[2]) {
+
+    const compact = new RegExp(`([\\d.]+)\\s*([KMB])\\s+${noun}s?\\b`, "i");
+    let m = compact.exec(label);
+    if (m) {
       const mult = { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()];
       return Math.round(parseFloat(m[1]) * mult);
     }
+
+    const exact = new RegExp(`(\\d[\\d,.\\s]*)\\s+${noun}s?\\b`, "i");
+    m = exact.exec(label);
+    if (!m) return null;
     return parseInt(m[1].replace(/\D/g, ""), 10);
   }
 
