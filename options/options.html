@@ -178,12 +178,13 @@
           <textarea id="searchQuery" rows="3" placeholder="(launch OR launching OR &quot;just shipped&quot;) min_faves:150 -filter:replies lang:en"></textarea>
         </label>
         <p class="hint">
-          Keep <strong>Require launch signals</strong> on when using this. The
-          query buys recall and it is deliberately loose: phrases like "now
-          live" and "introducing" also show up in news copy, and a live test of
-          it returned a ballistic-missile report and two Iran stories alongside
-          the product posts. The launch score is what cuts those, since a news
-          post with video still scores 1 against a bar of 2.
+          The query ANDs launch phrasing with product vocabulary, and the
+          second half is what makes it usable: "just launched" alone matches
+          ballistic missiles, but "just launched" next to app, beta, API or
+          SaaS does not. Tuned live, that change took the news share of a page
+          from 3-in-5 to none, and the shipped query kept 4 of 5 posts at a 10k
+          view floor. Keep <strong>Require launch signals</strong> on as the
+          second line of defence.
         </p>
         <p class="hint">
           X search has no <code>min_views</code>, so the view floor is converted

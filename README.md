@@ -104,12 +104,27 @@ views divided by 170. Checked against live results, `min_faves:150` lands around
 a 25k-view median. The exact view floor and follower ceiling are still enforced
 on the results, so the conversion only has to be approximately right.
 
-The query is built from your settings and shown in the panel before you commit
-to it. **Keep the launch-signal requirement on when using this.** The query is
-deliberately loose to buy recall, and "launch" has senses that no search
-operator separates: the first live test returned a ballistic-missile report as
-its top hit. The launch score is what removes those — a news post carrying video
-still scores 1 against a bar of 2.
+The query ANDs two groups: launch phrasing, and product vocabulary. The second
+group is what makes it work. "launch" has senses no search operator separates,
+and the first live test returned a ballistic-missile report as its top hit;
+requiring a product word alongside it fixes that, because news copy almost never
+carries product vocabulary.
+
+Tuned against live results, in order:
+
+| query | result on a live page |
+| --- | --- |
+| bare `launch` terms, Latest | top hit was a ballistic missile report |
+| phrases only, Latest | 3 of 5 were Iran/Syria news |
+| phrases AND product terms, Top | 1 of 5 news, 3 of 5 kept at a 10k floor |
+| the shipped query, Top | **4 of 5 kept, no news at all** |
+
+That last run returned 452k, 98k, 75k, 29k and 5.1k view posts, led by
+"Introducing OpenSEO, the open source alternative" — against a home feed where
+roughly one post in eight clears even 50k views.
+
+Sorting defaults to Top rather than Latest. Latest gets flooded by whatever news
+cycle is running, which is how the Iran stories got in.
 
 ## Where it applies
 

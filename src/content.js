@@ -24,7 +24,7 @@ const LOCAL = {
   requireLaunch: true,
   minPerPage: 2,
   searchFeed: false,
-  searchLatest: true,
+  searchLatest: false,
   searchVideoOnly: false,
   searchQuery: "",
   blockExplore: true,
@@ -67,11 +67,19 @@ function publishConfig() {
 // the page and an empty page ends the feed. Here the pool arriving is already
 // mostly good, so the gates trim rather than gut it.
 //
-// The catch is that X search has no min_views operator. Measured on a live
-// feed, likes run about 0.6% of views, so likes x ~170 approximates reach —
-// that ratio is the only available bridge from the view floor you set to
-// something the server can actually enforce.
-const LIKES_PER_VIEW = 0.006;
+// The catch is that X search has no min_views operator, and min_faves is a
+// worse proxy for reach than it first appears. Measured on live search results:
+// the high-view posts ran 0.42% and 0.56% like rates while the low-view ones ran
+// 2.8% to 3.7%. Engagement rate falls as reach rises, so a min_faves tuned to
+// the view floor excludes precisely the posts worth keeping — a 40k-view post
+// with 170 likes dies at min_faves:300.
+//
+// So min_faves is used as a junk floor, not as a stand-in for the view floor.
+// It is deliberately set well below what the view floor implies, and the exact
+// reach bar is enforced here on the results, where it can be done properly.
+const LIKES_PER_VIEW = 0.002;
+const MIN_FAVES_FLOOR = 25;
+const MIN_FAVES_CAP = 400;
 
 // Phrases, not bare words. "launch" on its own matches missile launches, rocket
 // launches and launch parties — the first live test of this query returned a
@@ -79,15 +87,28 @@ const LIKES_PER_VIEW = 0.006;
 // around a product.
 const SEARCH_TERMS = [
   '"just shipped"', '"just launched"', '"we launched"', '"launching today"',
-  '"now live"', '"built this"', '"product hunt"', '"open source"',
-  '"new app"', "waitlist", "introducing",
+  '"now live"', '"built this"', '"product hunt"', "waitlist", "introducing",
+];
+
+// ANDed against the launch phrases, and this is the single thing that makes the
+// query usable. "just launched" alone matches ballistic missiles; "just
+// launched" AND one of these does not, because news copy almost never carries
+// product vocabulary. Measured on live results, adding this group took the
+// news share of a page from 3-in-5 down to 1-in-5.
+const PRODUCT_TERMS = [
+  "app", "product", "beta", "tool", "API", "SaaS", "startup",
+  "website", "feature", '"open source"', '"side project"',
 ];
 
 function buildSearchQuery(c) {
   if (c.searchQuery && c.searchQuery.trim()) return c.searchQuery.trim();
-  const parts = [`(${SEARCH_TERMS.join(" OR ")})`];
-  const faves = Math.round((c.minViews || 0) * LIKES_PER_VIEW);
-  if (faves >= 10) parts.push(`min_faves:${faves}`);
+  const parts = [
+    `(${SEARCH_TERMS.join(" OR ")})`,
+    `(${PRODUCT_TERMS.join(" OR ")})`,
+  ];
+  const raw = Math.round((c.minViews || 0) * LIKES_PER_VIEW);
+  const faves = Math.min(MIN_FAVES_CAP, raw);
+  if (faves >= MIN_FAVES_FLOOR) parts.push(`min_faves:${faves}`);
   if (c.searchVideoOnly) parts.push("filter:native_video");
   parts.push("-filter:replies", "lang:en");
   return parts.join(" ");

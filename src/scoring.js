@@ -43,7 +43,7 @@ self.XLF = (() => {
     // timeline. The server does the coarse filtering, so what arrives is
     // mostly good and our gates drop a little rather than nearly everything.
     searchFeed: false,
-    searchLatest: true,
+    searchLatest: false,
     searchVideoOnly: false,
     searchQuery: "",
     history: [],
