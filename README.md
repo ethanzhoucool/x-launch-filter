@@ -34,6 +34,16 @@ What survives has to clear the bars you set.
 percentage of views, and bookmarks as a percentage of views. Bookmark rate is
 the best available "someone thought this was worth keeping" signal.
 
+**A follower ceiling, off by default.** Drops posts from accounts above a
+follower count, to surface indie builders shipping things rather than megaphone
+accounts whose reach says little about whether the thing is interesting. It
+pairs naturally with a *lower* view floor: a 20k-view post from someone with
+3,000 followers travelled much further than its author's audience, which is
+usually the interesting case.
+
+An author whose follower count cannot be read is never dropped by this gate.
+The DOM path cannot see follower counts at all, so it never applies there.
+
 **A launch score,** which has to reach 2:
 
 | signal | weight |

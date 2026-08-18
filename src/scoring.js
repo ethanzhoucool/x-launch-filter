@@ -19,6 +19,10 @@ self.XLF = (() => {
     // these default off — stacking them with a high view floor empties the feed.
     minLikeRate: 0,
     minBookmarkRate: 0,
+    // Follower ceiling. 0 is off. Aimed at finding indie builders shipping
+    // things rather than megaphone accounts, whose reach says little about
+    // whether the thing itself is interesting.
+    maxFollowers: 0,
     // Last-resort filler. A page filtered to nothing stops X paginating, so
     // this many below-bar posts go back in rather than let the feed die. The
     // read-ahead bank in intercept.js exists to make it unnecessary; 0 turns it
@@ -148,6 +152,10 @@ self.XLF = (() => {
     if (cfg.minBookmarkRate > 0 && stats.bookmarkRate < cfg.minBookmarkRate) {
       return { keep: false, reason: "low bookmark rate", stats };
     }
+    if (cfg.maxFollowers > 0 && post.followers != null &&
+        post.followers > cfg.maxFollowers) {
+      return { keep: false, reason: "too many followers", stats };
+    }
 
     if (cfg.requireLaunch) {
       const score =
@@ -161,6 +169,21 @@ self.XLF = (() => {
   }
 
   /* ---------- path 1: straight off the API ---------- */
+
+  // The author object has moved around across X's schema revisions, so try the
+  // known shapes and return null rather than 0 when none match. null means
+  // "unknown", and an unknown follower count is never filtered on — a wrong
+  // guess here should cost a missed filter, not a blank feed.
+  function followersOf(t) {
+    const u = t?.core?.user_results?.result;
+    if (!u) return null;
+    const n =
+      u.legacy?.followers_count ??
+      u.followers_count ??
+      u.core?.followers_count ??
+      u.relationship_counts?.followers;
+    return typeof n === "number" ? n : null;
+  }
 
   // Verified against a live HomeTimeline response: views.count is a string,
   // counts live on .legacy, and TweetWithVisibilityResults wraps the real tweet
@@ -192,6 +215,7 @@ self.XLF = (() => {
 
     return {
       views: Number(t.views?.count) || 0,
+      followers: followersOf(t),
       likes: legacy.favorite_count || 0,
       bookmarks: legacy.bookmark_count || 0,
       text: `${note || legacy.full_text || ""} ${cardText}`,
@@ -269,6 +293,9 @@ self.XLF = (() => {
     const ctx = art.querySelector('[data-testid="socialContext"]');
 
     return {
+      // A timeline post does not render its author's follower count, so the DOM
+      // path leaves this unknown and the ceiling simply does not apply there.
+      followers: null,
       views,
       likes: parseCount(label, "like") || 0,
       bookmarks: parseCount(label, "bookmark") || 0,

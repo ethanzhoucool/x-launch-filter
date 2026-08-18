@@ -2,7 +2,7 @@
 // this extension, and locking that behind the unlock made experimenting worse
 // without making the filter meaningfully harder to defeat.
 
-const NUMS = ["minViews", "minLikeRate", "minBookmarkRate"];
+const NUMS = ["minViews", "minLikeRate", "minBookmarkRate", "maxFollowers"];
 const BOOLS = [
   "requireLaunch",
   "hideAds",

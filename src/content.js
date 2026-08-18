@@ -20,6 +20,7 @@ const LOCAL = {
   minViews: 50000,
   minLikeRate: 0,
   minBookmarkRate: 0,
+  maxFollowers: 0,
   requireLaunch: true,
   minPerPage: 2,
   blockExplore: true,
@@ -117,6 +118,12 @@ function setHud() {
   bits.push(`${Math.round(cfg.minViews / 1000)}k+`);
   if (cfg.minLikeRate > 0) bits.push(`${cfg.minLikeRate}% likes`);
   if (cfg.minBookmarkRate > 0) bits.push(`${cfg.minBookmarkRate}% saves`);
+  if (cfg.maxFollowers > 0) {
+    const f = cfg.maxFollowers >= 1000
+      ? `${Math.round(cfg.maxFollowers / 1000)}k`
+      : cfg.maxFollowers;
+    bits.push(`under ${f} followers`);
+  }
   // Filler is the one thing here that shows you posts below your own bar, so
   // it says so rather than looking like the filter missed them.
   if (tally.rescued) bits.push(`${tally.rescued} below bar`);
@@ -150,6 +157,10 @@ const VIEW_STEPS = [
 ];
 const LIKE_STEPS = [
   [0, "off"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"], [2, "2%"], [3, "3%"], [5, "5%"],
+];
+const FOLLOWER_STEPS = [
+  [0, "any"], [1000, "1k"], [5000, "5k"], [10000, "10k"], [25000, "25k"],
+  [50000, "50k"], [100000, "100k"], [500000, "500k"], [1000000, "1M"],
 ];
 const FILLER_STEPS = [
   [0, "none"], [1, "1"], [2, "2"], [3, "3"],
@@ -187,6 +198,7 @@ function buildPanel() {
   const likes = buildSelect(LIKE_STEPS, cfg.minLikeRate);
   const marks = buildSelect(BOOKMARK_STEPS, cfg.minBookmarkRate);
 
+  const followers = buildSelect(FOLLOWER_STEPS, cfg.maxFollowers);
   const filler = buildSelect(FILLER_STEPS, cfg.minPerPage);
 
   const launch = document.createElement("input");
@@ -212,6 +224,7 @@ function buildPanel() {
         minBookmarkRate: Number(marks.value),
         requireLaunch: launch.checked,
         minPerPage: Number(filler.value),
+        maxFollowers: Number(followers.value),
       },
       () => location.reload()
     );
@@ -230,6 +243,7 @@ function buildPanel() {
     panelRow("Minimum views", views),
     panelRow("Like rate", likes),
     panelRow("Bookmark rate", marks),
+    panelRow("Max followers", followers),
     panelRow("Below-bar filler", filler),
     launchRow,
     actions,
