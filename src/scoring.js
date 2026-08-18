@@ -331,9 +331,59 @@ self.XLF = (() => {
 
   const decide = (art, cfg) => judge(fromArticle(art), cfg);
 
+  /* ---------- the judgement record ---------- */
+
+  // A post reduced to the signals every gate reads, so a candidate config can be
+  // re-scored later without the post. Keys are short because a few hundred of
+  // these are stored per browsing session.
+  function record(post, cfg) {
+    if (!post) return null;
+    return {
+      v: post.views || 0,
+      lr: rate(post.likes, post.views),
+      br: rate(post.bookmarks, post.views),
+      f: post.followers == null ? null : post.followers,
+      kw: !!(cfg.includeRe && cfg.includeRe.test(post.text)),
+      ns: !!(cfg.excludeRe && cfg.excludeRe.test(post.text)),
+      vid: !!post.hasVideo,
+      cd: !!post.hasCard,
+      ph: !!post.hasPhoto,
+      rp: !!post.isReply,
+      rt: !!post.isRepost,
+      ad: !!post.isAd,
+    };
+  }
+
+  // Mirrors judge()'s gate order over a record. Kept beside judge() on purpose:
+  // if one gains a gate, so must the other, and the tests assert they agree.
+  function rejudge(r, cfg) {
+    if (!r) return { keep: false, reason: "unreadable" };
+    if (cfg.hideAds && r.ad) return { keep: false, reason: "ads" };
+    if (cfg.hideReposts && r.rt) return { keep: false, reason: "reposts" };
+    if (cfg.hideReplies && r.rp) return { keep: false, reason: "replies" };
+    if (r.ns) return { keep: false, reason: "muted topics" };
+    if (r.v < cfg.minViews) return { keep: false, reason: "views" };
+    if (cfg.minLikeRate > 0 && r.lr < cfg.minLikeRate) {
+      return { keep: false, reason: "like rate" };
+    }
+    if (cfg.minBookmarkRate > 0 && r.br < cfg.minBookmarkRate) {
+      return { keep: false, reason: "bookmark rate" };
+    }
+    if (cfg.maxFollowers > 0 && r.f != null && r.f > cfg.maxFollowers) {
+      return { keep: false, reason: "account size" };
+    }
+    if (cfg.requireLaunch) {
+      const score =
+        (r.kw ? WEIGHTS.keyword : 0) + (r.vid ? WEIGHTS.video : 0) +
+        (r.cd ? WEIGHTS.card : 0) + (r.ph ? WEIGHTS.photo : 0);
+      if (score < LAUNCH_BAR) return { keep: false, reason: "no launch signal" };
+    }
+    return { keep: true, reason: "keep" };
+  }
+
   return {
     DEFAULTS, INCLUDE, EXCLUDE,
-    buildConfig, judge, fromApi, fromArticle, decide,
+    buildConfig, judge, fromApi, fromArticle, decide, record, rejudge,
     parseViews, parseCount,
   };
 })();

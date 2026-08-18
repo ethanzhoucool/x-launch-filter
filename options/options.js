@@ -2,9 +2,8 @@
 // this extension, and locking that behind the unlock made experimenting worse
 // without making the filter meaningfully harder to defeat.
 
-const NUMS = ["minViews", "minLikeRate", "minBookmarkRate", "maxFollowers"];
+const NUMS = [];
 const BOOLS = [
-  "requireLaunch",
   "hideAds",
   "hideReplies",
   "hideReposts",
@@ -13,7 +12,6 @@ const BOOLS = [
   "filterProfiles",
   "showHud",
   "debug",
-  "searchFeed",
   "searchLatest",
   "searchVideoOnly",
 ];

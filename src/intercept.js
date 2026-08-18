@@ -115,8 +115,12 @@
     const single = content.itemContent?.tweet_results?.result;
     if (single) {
       const promoted = !!content.itemContent?.promotedMetadata;
-      const v = self.XLF.judge(self.XLF.fromApi(single, { promoted }), cfg);
-      return { keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0 };
+      const post = self.XLF.fromApi(single, { promoted });
+      const v = self.XLF.judge(post, cfg);
+      return {
+        keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0,
+        record: self.XLF.record(post, cfg),
+      };
     }
 
     // A conversation module is a post plus its replies. Keep the thread if any
@@ -126,16 +130,21 @@
     if (Array.isArray(content.items)) {
       let judged = 0;
       let best = 0;
+      let rec = null;
       for (const it of content.items) {
         const r = it?.item?.itemContent?.tweet_results?.result;
         if (!r) continue;
         judged = 1;
         const promoted = !!it.item.itemContent.promotedMetadata;
-        const v = self.XLF.judge(self.XLF.fromApi(r, { promoted }), cfg);
+        const post = self.XLF.fromApi(r, { promoted });
+        const v = self.XLF.judge(post, cfg);
         best = Math.max(best, v.stats?.views || 0);
-        if (v.keep) return { keep: true, judged: 1, reason: "thread", views: best };
+        if (!rec) rec = self.XLF.record(post, cfg);
+        if (v.keep) {
+          return { keep: true, judged: 1, reason: "thread", views: best, record: rec };
+        }
       }
-      if (judged) return { keep: false, judged: 1, reason: "thread", views: best };
+      if (judged) return { keep: false, judged: 1, reason: "thread", views: best, record: rec };
     }
 
     // Prompts, who-to-follow carousels: not posts, leave them alone.
@@ -158,10 +167,14 @@
     let judged = 0;
     let dropped = 0;
     const cut = [];
+    // Every judgement is kept, not just the counts. The panel re-scores these
+    // against candidate settings so tuning does not need a reload to be legible.
+    const records = [];
 
     for (let i = entries.length - 1; i >= 0; i--) {
       const v = entryVerdict(entries[i], cfg);
       judged += v.judged;
+      if (v.record) records.push(v.record);
       if (!v.keep) {
         dropped++;
         cut.push({ entry: entries[i], views: v.views || 0 });
@@ -212,6 +225,7 @@
             kept: survivors,
             dropped: dropped - rescued,
             rescued,
+            records,
           }),
         })
       );

@@ -15,88 +15,14 @@
         </div>
       </header>
 
-      <section>
-        <h2>The bar</h2>
-        <label class="field">
-          <span>Minimum views</span>
-          <select id="minViews">
-            <option value="0">no floor</option>
-            <option value="5000">5k</option>
-            <option value="10000">10k</option>
-            <option value="25000">25k</option>
-            <option value="50000">50k</option>
-            <option value="100000">100k</option>
-            <option value="250000">250k</option>
-            <option value="500000">500k</option>
-            <option value="1000000">1M</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Minimum like rate <em>likes as a % of views</em></span>
-          <select id="minLikeRate">
-            <option value="0">off</option>
-            <option value="0.25">0.25%</option>
-            <option value="0.5">0.5%</option>
-            <option value="1">1%</option>
-            <option value="2">2%</option>
-            <option value="3">3%</option>
-            <option value="5">5%</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Maximum followers <em>0 keeps every account</em></span>
-          <select id="maxFollowers">
-            <option value="0">any</option>
-            <option value="1000">1k</option>
-            <option value="5000">5k</option>
-            <option value="10000">10k</option>
-            <option value="25000">25k</option>
-            <option value="50000">50k</option>
-            <option value="100000">100k</option>
-            <option value="500000">500k</option>
-            <option value="1000000">1M</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Minimum bookmark rate <em>bookmarks as a % of views</em></span>
-          <select id="minBookmarkRate">
-            <option value="0">off</option>
-            <option value="0.05">0.05%</option>
-            <option value="0.1">0.1%</option>
-            <option value="0.25">0.25%</option>
-            <option value="0.5">0.5%</option>
-            <option value="1">1%</option>
-          </select>
-        </label>
-
-        <p class="hint">
-          Measured on a live sample of this feed: median post 942 views, median
-          like rate 0.59%, median bookmark rate 0.01%. Reach and engagement rate
-          pull <em>against</em> each other — a 2M-view post in that sample ran
-          0.5% likes and 0.19% bookmarks, both below what small posts manage. So
-          stacking a high view floor with a high rate floor returns nothing.
-          Pick one to lead with. Bookmark rate is the best "this was worth
-          keeping" signal; 0.1% is already strong.
-        </p>
-        <label class="check">
-          <input type="checkbox" id="requireLaunch" />
-          <span>
-            Also require launch/product signals
-            <em
-              >Scored: a launch keyword is worth 2, native video 1, a link card
-              1, a photo 0.5. A post needs 2 to get through — so a keyword
-              alone passes, and so does a wordless demo video that links to the
-              product.</em
-            >
-          </span>
-        </label>
-      </section>
+      <p class="hint pointer">
+        The bar — views, account size, engagement rates and the feed mode — is
+        set from the pill on x.com, where you can see what each change would
+        keep before you commit to it.
+      </p>
 
       <section>
-        <h2>What else to drop</h2>
+        <h2>What counts as a post</h2>
         <label class="check">
           <input type="checkbox" id="hideAds" /><span>Promoted posts</span>
         </label>
@@ -114,7 +40,7 @@
       </section>
 
       <section>
-        <h2>Where it applies</h2>
+        <h2>Where it runs</h2>
         <p class="hint">
           The home timeline is always filtered. Search is left alone by default
           — searching is the deliberate behaviour this is trying to push you
@@ -146,7 +72,7 @@
       </section>
 
       <section>
-        <h2>Search as the feed</h2>
+        <h2>Search query</h2>
         <p class="hint">
           X's search filters on the server and paginates natively, so what
           arrives is already mostly good and the gates above trim it rather than
@@ -154,14 +80,6 @@
           roughly 88% below any useful bar, and a page filtered to nothing is
           what ends infinite scroll.
         </p>
-        <label class="check">
-          <input type="checkbox" id="searchFeed" />
-          <span>
-            Open a search instead of the home timeline
-            <em>x.com/home redirects to the query below. Everything else on X
-            is untouched.</em>
-          </span>
-        </label>
         <label class="check">
           <input type="checkbox" id="searchLatest" />
           <span>
@@ -195,10 +113,11 @@
       </section>
 
       <section>
-        <h2>Your keywords</h2>
+        <h2>Keywords</h2>
         <p class="hint">
           One per line, or comma separated. These add to the built-in lists
-          rather than replacing them.
+          rather than replacing them. Keyword changes apply on the next reload
+          and are not reflected in the pill's preview until new posts arrive.
         </p>
         <label class="field col">
           <span>Always treat as launch content</span>

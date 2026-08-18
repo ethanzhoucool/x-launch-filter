@@ -13,12 +13,38 @@ and no layout is overridden.
 1. Clone or download this folder.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Click **Load unpacked** and select the folder.
-4. Open `x.com/home`. A counter in the bottom-left corner reports how many posts
-   were kept and how many were dropped.
+4. Open `x.com/home`. A pill in the bottom-left corner reports what is running.
 
-Click that counter to change the view floor and the engagement rates without
-leaving the page. Saving reloads the tab, because the posts already on screen
-were filtered on the way in and cannot be re-judged without refetching them.
+## The pill and the panel
+
+The pill is the only thing visible in normal use and the only entry point. It
+reports outcomes, never settings:
+
+```
+Search · 31 of 38                 filtering the search feed
+Home · 12 of 96 · 2 below bar     filtering home, with keep-alive filler
+Home · watching…                  nothing judged yet
+Nothing passed · 96 hidden        the bar is higher than anything that arrived
+Paused · 12m left                 paused, and it re-arms itself
+```
+
+Clicking it opens the tuning panel, which is the **only** place the bar is set.
+Every control there re-scores the posts already seen this session as you change
+it, so the panel tells you what a setting *would* keep before you commit:
+
+```
+Would keep 9 of 96 seen · now 12
+below 50k views   ████████████ 52
+no launch signal  ████         17
+muted topics      ██            8
+```
+
+That readout is the point of the whole interface. These thresholds interact in
+ways nobody would guess — reach fights engagement rate, and a follower ceiling
+fights a view floor — and the bars make a trap visible as you create it rather
+than after a reload turns the feed blank. Applying still reloads, because posts
+already on screen were judged on the way in and cannot be re-judged; but the
+reload is now a single commit rather than a guess in a loop.
 
 ## How a post is judged
 
@@ -138,14 +164,15 @@ The popup also carries four one-click launch searches built from X's advanced
 operators. X search has no `min_views` operator, so those queries use
 `min_faves:` as the reach proxy.
 
-## Turning it off
+## Pausing
 
-Pick a duration and hold a button for a second and a half. That is the whole
-thing. The unlock is a fixed-length lease: the filter turns itself back on when
-the time is up, and the badge counts down the minutes.
+Pause for 15, 30 or 60 minutes from the panel or the popup. It always re-arms
+itself, and the badge counts down.
 
-The friction is deliberately light. This is a work surface, and the failure mode
-it guards against is a reflex rather than a binge.
+There used to be a hold-to-unlock ceremony here, inherited from a YouTube
+blocker. It is gone. This became a research tool that gets tuned constantly, and
+the ceremony only taxed the tuning; the lease is what actually defeats a reflex,
+and it does so without asking for a performance.
 
 ## How the filtering works
 
@@ -269,13 +296,24 @@ self.XLF.judge(self.XLF.fromApi({
 }), cfg);   // → { keep: true, reason: "keep", stats: { ... } }
 ```
 
+## Interface notes
+
+The extension reads X's body background to pick between X's light, dim and
+lights-out themes, since X exposes no theme class, and styles itself from tokens
+scoped to that. It deliberately avoids X's own blue: extension chrome should be
+identifiable at a glance rather than cosplaying as the site's UI.
+
+The settings page holds only what you set once — keywords, what counts as a
+post, where it runs, the query override, debugging. Anything you tune while
+looking at results lives on the pill.
+
 ## Files
 
 ```
 manifest.json
 src/scoring.js       the classifier: keyword lists, the bars, the verdict
 src/intercept.js     page world: filters posts out of the API response
-src/content.js       isolated world: config bridge, counter, Explore gate
+src/content.js       isolated world: config bridge, pill, panel, ledger, gate
 src/filter.css       the counter and the Explore gate
 src/background.js    lock state, relock alarm, badge
 popup/               status, launch searches, hold-to-unlock
