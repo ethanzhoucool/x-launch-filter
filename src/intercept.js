@@ -6,19 +6,25 @@
 // reflow the list, so it leaves a permanent hole, and the reserved scroll space
 // never shrinks. Deleting the post from the response sidesteps all of that.
 //
-// The hard part is not filtering, it is that filtering starves the feed. X's
-// "load more" is driven by rendered content, so a page filtered down to nothing
-// is a dead end — measured: with an empty timeline, scrolling to the bottom
-// eight times produced zero further requests. The answer is to read ahead:
-// while X renders one page, this quietly pulls the next few over the same
-// cursor, keeps the posts that qualify, and hands them to X on its next
-// request. X stays fed with posts that actually pass the bar.
+// This file does ONE thing: filter what X asked for. It does not fetch, it does
+// not rewrite cursors, it does not reorder. That restraint is deliberate and was
+// learned expensively — an earlier version read ahead over the cursor and banked
+// posts for later, and every part of that machinery broke pagination:
 //
-// Everything here was verified against live traffic: transport is XHR, the
-// request is a GET, entries live at
-//   data.home.home_timeline_urt.instructions[<n>].entries
-// and replaying X's own signed headers on a cursor URL returns 200 with a
-// further cursor. The walk finds entries structurally rather than by that path.
+//   * the read-ahead replayed the home cursor against whatever endpoint X had
+//     opened last, so it failed silently on essentially every request;
+//   * with it failing, the read position never advanced, so every response had
+//     its Bottom cursor rewritten to the same stale value and X refetched the
+//     page it already had;
+//   * the dedupe then stripped that page as "already delivered", so X received
+//     an empty page and concluded the timeline had ended.
+//
+// Infinite scroll is worth more than a full page. X owns pagination; we only
+// decide what survives.
+//
+// Verified against live traffic: transport is XHR, the request is a GET,
+// entries live at data.home.home_timeline_urt.instructions[<n>].entries, and the
+// walk finds them structurally rather than by that path.
 //
 // Every failure path returns the untouched response. An unfiltered feed is a
 // bad day; a broken timeline is a bug report.
@@ -32,14 +38,15 @@
     UserTweetsAndReplies: "profile",
   };
 
-  // Captured before we patch anything, so read-ahead requests never run back
-  // through our own filter.
-  const rawFetch = self.fetch ? self.fetch.bind(self) : null;
-
   const opOf = (url) => {
     if (!url || url.indexOf("/graphql/") === -1) return null;
     const m = /\/graphql\/[^/]+\/([A-Za-z]+)/.exec(url);
     return m && OPS[m[1]] ? m[1] : null;
+  };
+
+  let debugOn = false;
+  const log = (...args) => {
+    if (debugOn) console.debug("%c[xlf]", "color:#1d9bf0", ...args);
   };
 
   function config() {
@@ -52,13 +59,15 @@
     }
 
     const cfg = self.XLF.buildConfig(stored || {});
+    debugOn = !!cfg.debug;
 
     // No bridge means no settings, and critically no way for the popup to turn
     // this off — the off switch travels through that same attribute. Absence is
-    // therefore treated as off: worst case is an unfiltered timeline and a
-    // working browser, rather than a modified one with no escape.
+    // treated as off: worst case is an unfiltered timeline and a working
+    // browser, rather than a modified one with no escape.
     if (!stored) {
       cfg.filterOn = false;
+      log("no config bridge yet — passing this response through untouched");
       return cfg;
     }
     cfg.filterOn = cfg.enabled !== false && Date.now() >= (cfg.unlockUntil || 0);
@@ -107,91 +116,30 @@
     if (single) {
       const promoted = !!content.itemContent?.promotedMetadata;
       const v = self.XLF.judge(self.XLF.fromApi(single, { promoted }), cfg);
-      return { keep: v.keep, judged: 1, views: v.stats?.views || 0 };
+      return { keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0 };
     }
 
-    // A conversation module is a post plus its replies. Judge the root and take
-    // the thread with it, rather than leaving a thread full of holes.
+    // A conversation module is a post plus its replies. Keep the thread if any
+    // post in it qualifies, rather than judging one item and taking the rest
+    // along blind — X uses these for "A replied to B", where the first item can
+    // belong to someone you do not follow.
     if (Array.isArray(content.items)) {
+      let judged = 0;
+      let best = 0;
       for (const it of content.items) {
         const r = it?.item?.itemContent?.tweet_results?.result;
         if (!r) continue;
+        judged = 1;
         const promoted = !!it.item.itemContent.promotedMetadata;
         const v = self.XLF.judge(self.XLF.fromApi(r, { promoted }), cfg);
-        return { keep: v.keep, judged: 1, views: v.stats?.views || 0 };
+        best = Math.max(best, v.stats?.views || 0);
+        if (v.keep) return { keep: true, judged: 1, reason: "thread", views: best };
       }
+      if (judged) return { keep: false, judged: 1, reason: "thread", views: best };
     }
 
     // Prompts, who-to-follow carousels: not posts, leave them alone.
     return { keep: true, judged: 0 };
-  }
-
-  /* ---------- read-ahead ---------- */
-
-  // What X's own request looked like, so the read-ahead can replay it.
-  let lastUrl = null;
-  let lastHeaders = null;
-  // How far ahead we have already read. X's cursor is rewritten to match, so it
-  // never refetches ground we covered.
-  let readCursor = null;
-  let bank = [];
-  let banking = false;
-  const delivered = new Set();
-
-  function urlWithCursor(url, cursor) {
-    const u = new URL(url, location.origin);
-    const vars = JSON.parse(u.searchParams.get("variables") || "{}");
-    vars.cursor = cursor;
-    u.searchParams.set("variables", JSON.stringify(vars));
-    return u.toString();
-  }
-
-  function remember(entries) {
-    for (const e of entries) {
-      if (!isCursor(e)) delivered.add(e.entryId);
-    }
-    if (delivered.size > 1500) delivered.clear();
-  }
-
-  // Pulls pages over the cursor until there are enough qualifying posts banked
-  // to fill X's next request. Runs in the background; nothing waits on it.
-  async function readAhead(cfg) {
-    if (banking || !rawFetch || !lastUrl || !lastHeaders || !readCursor) return;
-    const target = Math.max(1, cfg.pageTarget || 8);
-    if (bank.length >= target) return;
-
-    banking = true;
-    try {
-      let rounds = 0;
-      const maxRounds = Math.max(0, cfg.maxTopUps ?? 5);
-      while (bank.length < target && rounds < maxRounds && readCursor) {
-        rounds++;
-        const res = await rawFetch(urlWithCursor(lastUrl, readCursor), {
-          method: "GET",
-          headers: lastHeaders,
-          credentials: "include",
-          referrer: location.href,
-        });
-        if (!res.ok) break;
-
-        const entries = findEntries(await res.json());
-        if (!entries || !entries.length) break;
-
-        for (const e of entries) {
-          if (isCursor(e) || delivered.has(e.entryId)) continue;
-          const v = entryVerdict(e, cfg);
-          if (v.judged && v.keep) bank.push(e);
-        }
-
-        const next = bottomCursor(entries)?.content?.value;
-        if (!next || next === readCursor) break;
-        readCursor = next;
-      }
-    } catch {
-      /* read-ahead is best effort */
-    } finally {
-      banking = false;
-    }
   }
 
   /* ---------- filtering a payload ---------- */
@@ -201,71 +149,58 @@
     if (!cfg.filterOn || !appliesTo(opName, cfg)) return null;
 
     const entries = findEntries(root);
-    if (!entries) return null;
+    if (!entries) {
+      log(opName, "no entries array found — passing through");
+      return null;
+    }
 
+    const before = entries.length;
     let judged = 0;
     let dropped = 0;
     const cut = [];
 
     for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
-      // Read-ahead means X can be handed posts before it asks for them, so the
-      // same post can come round again. Drop the repeat.
-      if (!isCursor(entry) && delivered.has(entry.entryId)) {
-        entries.splice(i, 1);
-        continue;
-      }
-      const v = entryVerdict(entry, cfg);
+      const v = entryVerdict(entries[i], cfg);
       judged += v.judged;
       if (!v.keep) {
         dropped++;
-        cut.push({ at: i, entry, views: v.views || 0 });
+        cut.push({ entry: entries[i], views: v.views || 0 });
         entries.splice(i, 1);
       }
     }
 
-    const bottom = bottomCursor(entries);
-    if (!readCursor) readCursor = bottom?.content?.value || null;
-
-    let survivors = entries.filter((e) => !isCursor(e)).length;
-
-    // Spend the bank first: these already passed the bar on an earlier page.
-    const target = Math.max(1, cfg.pageTarget || 8);
-    let banked = 0;
-    if (bank.length && survivors < target) {
-      const take = bank.splice(0, target - survivors);
-      const at = bottom ? entries.indexOf(bottom) : entries.length;
-      entries.splice(at < 0 ? entries.length : at, 0, ...take);
-      banked = take.length;
-      survivors += take.length;
+    if (!judged) {
+      log(opName, "nothing judged (", before, "entries ) — passing through");
+      return null;
     }
 
-    // Last resort. X stops paginating on an empty page, so rather than let the
-    // feed die, put the strongest rejects back. Every post this returns is below
-    // your bar, which is why the bank above exists to make it unnecessary.
+    // Last resort. A page filtered to nothing gives X nothing to render and
+    // nothing to scroll, and it stops asking for more. Rather than let the feed
+    // end, put the strongest rejects back. Every post this returns is below the
+    // bar, which is why the counter names them separately.
     let rescued = 0;
     const floor = Math.max(0, cfg.minPerPage ?? 2);
-    if (judged && survivors < floor && cut.length) {
+    let survivors = judged - dropped;
+    if (survivors < floor && cut.length) {
+      const bottom = bottomCursor(entries);
+      // Insert ahead of the Bottom cursor: the indices recorded during removal
+      // are stale the moment anything else is spliced.
+      const at = bottom ? entries.indexOf(bottom) : entries.length;
       const picks = cut
         .filter((c) => c.views > 0)
         .sort((a, b) => b.views - a.views)
-        .slice(0, floor - survivors)
-        .sort((a, b) => a.at - b.at);
+        .slice(0, floor - survivors);
       for (const p of picks) {
-        entries.splice(Math.min(p.at, entries.length), 0, p.entry);
-        dropped--;
+        entries.splice(at < 0 ? entries.length : at, 0, p.entry);
         rescued++;
       }
     }
 
-    // Keep X's cursor level with how far the read-ahead got, so it does not
-    // refetch pages already mined.
-    if (bottom && readCursor) bottom.content.value = readCursor;
-
-    remember(entries);
-    if (!judged && !banked) return null;
-
-    readAhead(cfg);
+    log(
+      opName,
+      `${before} entries -> ${entries.length}`,
+      `| judged ${judged}, kept ${survivors}, dropped ${dropped - rescued}, filler ${rescued}`
+    );
 
     try {
       document.dispatchEvent(
@@ -273,9 +208,9 @@
           detail: JSON.stringify({
             op: opName,
             judged,
-            dropped,
-            kept: Math.max(0, judged - dropped),
-            banked,
+            // Rescues are below the bar, so they are never counted as kept.
+            kept: survivors,
+            dropped: dropped - rescued,
             rescued,
           }),
         })
@@ -300,36 +235,20 @@
 
   const proto = XMLHttpRequest.prototype;
   const origOpen = proto.open;
-  const origSetHeader = proto.setRequestHeader;
   const textDesc = Object.getOwnPropertyDescriptor(proto, "responseText");
   const respDesc = Object.getOwnPropertyDescriptor(proto, "response");
 
   proto.open = function (method, url, ...rest) {
     try {
-      const full = new URL(String(url), location.origin).toString();
-      this.__xlfOp = opOf(full);
-      if (this.__xlfOp) {
-        this.__xlfHeaders = {};
-        lastUrl = full;
-      }
+      this.__xlfOp = opOf(String(url));
     } catch {
       this.__xlfOp = null;
     }
+    // XHR objects get reused. Stale caches would serve the previous response.
+    this.__xlfCached = undefined;
+    this.__xlfRaw = undefined;
+    this.__xlfJsonDone = false;
     return origOpen.call(this, method, url, ...rest);
-  };
-
-  // X signs each request; replaying its own headers is what makes the
-  // read-ahead acceptable to the server.
-  proto.setRequestHeader = function (name, value) {
-    try {
-      if (this.__xlfHeaders) {
-        this.__xlfHeaders[name] = value;
-        lastHeaders = this.__xlfHeaders;
-      }
-    } catch {
-      /* ignore */
-    }
-    return origSetHeader.call(this, name, value);
   };
 
   function cachedText(xhr, raw) {
@@ -337,7 +256,8 @@
     xhr.__xlfRaw = raw;
     try {
       xhr.__xlfCached = filterText(raw, xhr.__xlfOp);
-    } catch {
+    } catch (e) {
+      log("filter threw, passing raw through:", e);
       xhr.__xlfCached = raw;
     }
     return xhr.__xlfCached;
@@ -367,15 +287,14 @@
           return typeof raw === "string" ? cachedText(this, raw) : raw;
         }
         if (type === "json" && raw && typeof raw === "object") {
-          // Filter exactly once. The browser hands back the same parsed object
-          // on every read, and filtering is no longer idempotent: a second pass
-          // would find every entry already marked delivered and strip the page
-          // to nothing.
+          // Filter once: the browser hands back the same parsed object on every
+          // read, and a second pass would re-run the filler.
           if (this.__xlfJsonDone) return raw;
           this.__xlfJsonDone = true;
           try {
             return filterPayload(raw, this.__xlfOp) || raw;
-          } catch {
+          } catch (e) {
+            log("json filter threw, passing raw through:", e);
             return raw;
           }
         }
@@ -386,9 +305,10 @@
 
   /* ---------- fetch, in case X moves ---------- */
 
-  if (rawFetch) {
+  const origFetch = self.fetch;
+  if (typeof origFetch === "function") {
     self.fetch = async function (...args) {
-      const res = await rawFetch.apply(this, args);
+      const res = await origFetch.apply(this, args);
       let op = null;
       try {
         const url = typeof args[0] === "string" ? args[0] : args[0]?.url || res.url;
@@ -401,12 +321,18 @@
         const raw = await res.clone().text();
         const out = filterText(raw, op);
         if (out === raw) return res;
+        // The body was re-serialised, so the original length and encoding
+        // headers no longer describe it.
+        const headers = new Headers(res.headers);
+        headers.delete("content-length");
+        headers.delete("content-encoding");
         return new Response(out, {
           status: res.status,
           statusText: res.statusText,
-          headers: res.headers,
+          headers,
         });
-      } catch {
+      } catch (e) {
+        log("fetch filter threw, passing through:", e);
         return res;
       }
     };

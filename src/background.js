@@ -19,6 +19,7 @@ const DEFAULTS = {
   showHud: true,
   extraInclude: "",
   extraExclude: "",
+  debug: false,
   history: [],
 };
 

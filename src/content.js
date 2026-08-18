@@ -35,7 +35,7 @@ let gateEl = null;
 let hudEl = null;
 let tally = { kept: 0, dropped: 0, rescued: 0 };
 
-const filterOn = () => cfg.enabled && Date.now() >= cfg.unlockUntil;
+const filterOn = () => cfg.enabled !== false && Date.now() >= (cfg.unlockUntil || 0);
 
 /* ---------- config bridge ---------- */
 

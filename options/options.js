@@ -12,6 +12,7 @@ const BOOLS = [
   "filterSearch",
   "filterProfiles",
   "showHud",
+  "debug",
 ];
 const TEXTS = ["extraInclude", "extraExclude"];
 

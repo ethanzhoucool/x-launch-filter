@@ -172,25 +172,34 @@ filter kept 5 posts out of 35 judged, and with the launch-keyword requirement on
 top it has kept as few as 1 out of 21. An empty column is a real outcome, not a
 bug. Lower the view floor in settings.
 
-**The feed is fed by reading ahead.** X's "load more" is driven by rendered
-content, so a page filtered down to nothing is a dead end. Measured: with an
-empty timeline, scrolling to the bottom eight times produced zero further
-timeline requests, and the feed simply ended.
+**Infinite scroll is worth more than a full page.** An earlier version read
+ahead over the pagination cursor, banked qualifying posts, and spliced them into
+X's next response. Every part of that broke scrolling, and it is worth recording
+why, because the idea is tempting:
 
-So while X renders one page, the interceptor quietly pulls the next few over the
-same cursor, keeps the posts that qualify, and banks them for X's next request.
-X's own cursor is rewritten to match how far the read-ahead got, so it never
-refetches ground already covered, and delivered posts are tracked so nothing
-appears twice. Replaying X's own signed headers on a cursor URL is what makes
-this possible: verified live, it returns 200 with a further cursor.
+- the read-ahead replayed the home cursor against whatever timeline endpoint X
+  had opened last, because the captured URL and headers lived in single globals.
+  It failed on essentially every request, silently;
+- with it failing, the read position never advanced, so every response had its
+  Bottom cursor rewritten to the same stale value and X refetched the page it
+  already had;
+- the dedupe then stripped that page as already delivered, so X received an
+  empty page and concluded the timeline had ended.
 
-**Below-bar filler, when even that is not enough.** If a page still comes up
-empty, `minPerPage` (default 2) puts the highest-view rejects back rather than
-let the feed die. These are genuinely below your bar, so the counter names them:
-"2 below bar". Set the dial to none if you would rather have the dead end than
-the dilution. At a strict setting — a 50k floor plus a 1% like rate plus launch
-signals — expect this to fire, because on a measured page only about one post in
-eight clears 50k views before the other gates apply.
+The interceptor now only decides what survives. It does not fetch, rewrite
+cursors, or reorder. X owns pagination.
+
+**Below-bar filler.** A page filtered to nothing gives X nothing to render and
+nothing to scroll, so it stops asking for more. `minPerPage` (default 2) puts
+the highest-view rejects back rather than let the feed end. These are genuinely
+below your bar, so the counter names them separately: "2 below bar". Set the
+dial to none for a strict feed, accepting the occasional dead end.
+
+**Turn on logging when something looks wrong.** The settings page has a debug
+toggle; with it on, every timeline response prints what it contained and what
+survived, prefixed `[xlf]`, in the DevTools console on x.com. Every failure path
+in this extension is silent by design, which makes an unfiltered feed and a
+crashed filter look identical without it.
 
 **Counts are per-surface.** The corner counter resets on route changes.
 

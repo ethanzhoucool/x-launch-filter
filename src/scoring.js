@@ -38,6 +38,7 @@ self.XLF = (() => {
     showHud: true,
     extraInclude: "",
     extraExclude: "",
+    debug: false,
     history: [],
   };
 
@@ -108,7 +109,13 @@ self.XLF = (() => {
       .filter(Boolean);
 
   function buildConfig(stored) {
-    const cfg = { ...DEFAULTS, ...stored };
+    // Nullish values must not override defaults. `post.views < null` is false,
+    // so a stray null minViews would silently disable the view floor.
+    const clean = {};
+    for (const k in stored || {}) {
+      if (stored[k] !== null && stored[k] !== undefined) clean[k] = stored[k];
+    }
+    const cfg = { ...DEFAULTS, ...clean };
     cfg.includeRe = toMatcher(INCLUDE.concat(parseList(cfg.extraInclude)));
     cfg.excludeRe = toMatcher(EXCLUDE.concat(parseList(cfg.extraExclude)));
     return cfg;
