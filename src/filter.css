@@ -1,22 +1,10 @@
-/* Everything here is gated on a class the content script owns, so the page is
-   untouched whenever the filter is off. */
+/* No layout overrides live here any more.
+   Posts are removed from the API response before X renders them, so X lays out
+   a genuinely shorter timeline and owns its own positioning, as it should. The
+   old `html.xlf-flow` rule that forced the virtualiser's absolutely-positioned
+   cells into normal flow is gone along with the problem it was patching. */
 
-/* The layout takeover. X absolutely positions each cell at a cached translateY,
-   so a hidden cell would otherwise leave a permanent hole. The parent reserves
-   scroll space with min-height (not height), which means normal flow keeps the
-   scroller healthy while letting hidden cells collapse. */
-html.xlf-flow [aria-label^="Timeline: "] > div > div[data-testid="cellInnerDiv"] {
-  position: relative !important;
-  transform: none !important;
-  top: auto !important;
-  left: auto !important;
-}
-
-html.xlf-flow [data-testid="cellInnerDiv"].xlf-hide {
-  display: none !important;
-}
-
-/* ---------- HUD ---------- */
+/* ---------- counter ---------- */
 
 #xlf-hud {
   position: fixed;

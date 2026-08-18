@@ -5,6 +5,8 @@ const DEFAULTS = {
   enabled: true,
   unlockUntil: 0,
   minViews: 50000,
+  minLikeRate: 0,
+  minBookmarkRate: 0,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,
@@ -40,7 +42,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   if (msg?.type === "unlock") {
-    unlock(msg.minutes, msg.reason).then(() => respond({ ok: true }));
+    unlock(msg.minutes).then(() => respond({ ok: true }));
     return true;
   }
   if (msg?.type === "relock") {
@@ -49,10 +51,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   }
 });
 
-async function unlock(minutes, reason) {
+async function unlock(minutes) {
   const until = Date.now() + minutes * 60_000;
   const { history = [] } = await chrome.storage.local.get({ history: [] });
-  history.unshift({ at: Date.now(), minutes, reason });
+  history.unshift({ at: Date.now(), minutes });
   await chrome.storage.local.set({ unlockUntil: until, history: history.slice(0, 40) });
   chrome.alarms.create(RELOCK_ALARM, { when: until });
   chrome.alarms.create(TICK_ALARM, { periodInMinutes: 1 });

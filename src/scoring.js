@@ -1,11 +1,24 @@
-// Decides whether one post survives the filter. Kept free of DOM-mutation and
-// storage concerns so the options page can reuse the keyword lists verbatim.
+// Decides whether one post survives the filter.
+//
+// Loaded into BOTH worlds: the isolated content script (for the HUD and the
+// Explore gate) and the MAIN-world interceptor (which judges posts straight off
+// the API response, before X's renderer ever sees them). So this file must stay
+// free of chrome.* and of anything DOM-only.
+//
+// Both paths normalise into the same record shape and call judge().
 
 self.XLF = (() => {
   const DEFAULTS = {
     enabled: true,
     unlockUntil: 0,
     minViews: 50000,
+    // Engagement rates, as a percentage of views. 0 disables the gate.
+    // Measured on a live feed: median like rate 0.59%, median bookmark rate
+    // 0.01%, and the biggest posts run LOWER (a 2M-view post landed at 0.5%
+    // likes / 0.19% bookmarks). Reach and rate pull against each other, so
+    // these default off — stacking them with a high view floor empties the feed.
+    minLikeRate: 0,
+    minBookmarkRate: 0,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,
@@ -45,7 +58,7 @@ self.XLF = (() => {
     "v1", "v2", "v3",
   ];
 
-  // Anything here is dropped before the view count is even read.
+  // Anything here is dropped before the numbers are even read.
   const EXCLUDE = [
     // politics / news cycle
     "trump", "biden", "election", "democrat", "republican", "congress",
@@ -92,53 +105,111 @@ self.XLF = (() => {
     return cfg;
   }
 
-  /* ---------- reading one post ---------- */
+  /* ---------- the verdict ---------- */
 
-  // The engagement bar's aria-label carries exact counts, e.g.
-  // "7 replies, 15 likes, 1 bookmark, 396 views" — far more reliable than the
-  // abbreviated "396" rendered on screen.
-  function parseViews(label) {
-    if (!label) return null;
-    let m = /([\d.]+)\s*([KMB])\s+views?/i.exec(label);
-    if (m) {
-      const mult = { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()];
-      return Math.round(parseFloat(m[1]) * mult);
+  // Weighted so a keyword alone clears the bar, and a wordless video that links
+  // out to the product does too. Anything weaker does not.
+  const WEIGHTS = { keyword: 2, video: 1, card: 1, photo: 0.5 };
+  const LAUNCH_BAR = 2;
+
+  const rate = (part, whole) => (whole > 0 ? (part / whole) * 100 : 0);
+
+  // post: { views, likes, bookmarks, text, hasVideo, hasPhoto, hasCard,
+  //         isReply, isRepost, isAd }
+  function judge(post, cfg) {
+    if (!post) return { keep: false, reason: "unreadable" };
+    if (cfg.hideAds && post.isAd) return { keep: false, reason: "ad" };
+    if (cfg.hideReposts && post.isRepost) return { keep: false, reason: "repost" };
+    if (cfg.hideReplies && post.isReply) return { keep: false, reason: "reply" };
+
+    if (cfg.excludeRe && cfg.excludeRe.test(post.text)) {
+      return { keep: false, reason: "noise" };
     }
-    m = /([\d][\d,. \s]*)\s+views?/i.exec(label);
-    if (m) return parseInt(m[1].replace(/\D/g, ""), 10);
-    return null;
+
+    // The DOM path can see a post before its counts render; the API path never
+    // can. Only the former sets views to null, and only it retries.
+    if (post.views == null) return { keep: false, reason: "measuring", retry: true };
+
+    const stats = {
+      views: post.views,
+      likeRate: rate(post.likes, post.views),
+      bookmarkRate: rate(post.bookmarks, post.views),
+    };
+
+    if (post.views < cfg.minViews) return { keep: false, reason: "low views", stats };
+    if (cfg.minLikeRate > 0 && stats.likeRate < cfg.minLikeRate) {
+      return { keep: false, reason: "low like rate", stats };
+    }
+    if (cfg.minBookmarkRate > 0 && stats.bookmarkRate < cfg.minBookmarkRate) {
+      return { keep: false, reason: "low bookmark rate", stats };
+    }
+
+    if (cfg.requireLaunch) {
+      const score =
+        (cfg.includeRe && cfg.includeRe.test(post.text) ? WEIGHTS.keyword : 0) +
+        (post.hasVideo ? WEIGHTS.video : 0) +
+        (post.hasCard ? WEIGHTS.card : 0) +
+        (post.hasPhoto ? WEIGHTS.photo : 0);
+      if (score < LAUNCH_BAR) return { keep: false, reason: "off-topic", stats };
+    }
+    return { keep: true, reason: "keep", stats };
   }
 
-  function readViews(art) {
-    const g = art.querySelector('[role="group"][aria-label]');
-    const fromGroup = g && parseViews(g.getAttribute("aria-label"));
-    if (fromGroup != null) return fromGroup;
-    const a = art.querySelector('a[href$="/analytics"]');
-    if (a) return parseViews(a.getAttribute("aria-label") || a.textContent);
-    return null;
-  }
+  /* ---------- path 1: straight off the API ---------- */
 
-  function tweetText(art) {
-    let s = "";
-    art.querySelectorAll('[data-testid="tweetText"]').forEach((n) => {
-      s += " " + n.textContent;
-    });
-    const card = art.querySelector('[data-testid="card.wrapper"]');
-    if (card) s += " " + card.textContent;
-    return s;
-  }
+  // Verified against a live HomeTimeline response: views.count is a string,
+  // counts live on .legacy, and TweetWithVisibilityResults wraps the real tweet
+  // one level deeper.
+  function fromApi(result, opts = {}) {
+    const t = result?.tweet || result;
+    const legacy = t?.legacy;
+    if (!legacy) return null;
 
-  function media(art) {
+    // Long posts truncate full_text; note_tweet carries the whole thing.
+    const note = t.note_tweet?.note_tweet_results?.result?.text;
+    const card = result?.card || t?.card;
+    const cardText = card
+      ? (card.legacy?.binding_values || [])
+          .filter((b) => b.key === "title" || b.key === "description")
+          .map((b) => b.value?.string_value || "")
+          .join(" ")
+      : "";
+
+    const media = legacy.extended_entities?.media || legacy.entities?.media || [];
+
     return {
-      video: !!art.querySelector(
-        '[data-testid="videoPlayer"], [data-testid="videoComponent"], video'
-      ),
-      photo: !!art.querySelector('[data-testid="tweetPhoto"]'),
-      card: !!art.querySelector('[data-testid="card.wrapper"]'),
+      views: Number(t.views?.count) || 0,
+      likes: legacy.favorite_count || 0,
+      bookmarks: legacy.bookmark_count || 0,
+      text: `${note || legacy.full_text || ""} ${cardText}`,
+      hasVideo: media.some((m) => m.type === "video" || m.type === "animated_gif"),
+      hasPhoto: media.some((m) => m.type === "photo"),
+      hasCard: !!card,
+      isReply: !!legacy.in_reply_to_status_id_str,
+      isRepost: !!legacy.retweeted_status_result,
+      isAd: !!opts.promoted,
     };
   }
 
-  function isPromoted(art) {
+  /* ---------- path 2: scraped off the DOM ---------- */
+
+  // The engagement bar's aria-label carries exact counts, e.g.
+  // "7 replies, 15 likes, 1 bookmark, 396 views".
+  function parseCount(label, noun) {
+    if (!label) return null;
+    const re = new RegExp(`([\\d.]+)\\s*([KMB])?\\s+${noun}s?\\b`, "i");
+    const m = re.exec(label);
+    if (!m) return null;
+    if (m[2]) {
+      const mult = { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()];
+      return Math.round(parseFloat(m[1]) * mult);
+    }
+    return parseInt(m[1].replace(/\D/g, ""), 10);
+  }
+
+  const parseViews = (label) => parseCount(label, "view");
+
+  function isPromotedEl(art) {
     if (art.querySelector('[data-testid="promotedIndicator"]')) return true;
     const spans = art.querySelectorAll("span");
     const n = Math.min(spans.length, 60);
@@ -149,12 +220,7 @@ self.XLF = (() => {
     return false;
   }
 
-  function isRepost(art) {
-    const ctx = art.querySelector('[data-testid="socialContext"]');
-    return !!ctx && /reposted/i.test(ctx.textContent || "");
-  }
-
-  function isReply(art) {
+  function isReplyEl(art) {
     const nodes = art.querySelectorAll('div[dir="ltr"], div[dir="auto"]');
     const n = Math.min(nodes.length, 15);
     for (let i = 0; i < n; i++) {
@@ -164,40 +230,44 @@ self.XLF = (() => {
     return false;
   }
 
-  /* ---------- the decision ---------- */
+  function fromArticle(art) {
+    const group = art.querySelector('[role="group"][aria-label]');
+    const label = group?.getAttribute("aria-label") || "";
+    const analytics = art.querySelector('a[href$="/analytics"]');
+    const views =
+      parseViews(label) ??
+      parseViews(analytics?.getAttribute("aria-label") || analytics?.textContent);
 
-  // Weighted so a keyword alone clears the bar, and a wordless video that links
-  // out to the product does too. Anything weaker does not.
-  const WEIGHTS = { keyword: 2, video: 1, card: 1, photo: 0.5 };
-  const LAUNCH_BAR = 2;
+    let text = "";
+    art.querySelectorAll('[data-testid="tweetText"]').forEach((n) => {
+      text += " " + n.textContent;
+    });
+    const card = art.querySelector('[data-testid="card.wrapper"]');
+    if (card) text += " " + card.textContent;
 
-  function decide(art, cfg) {
-    if (cfg.hideAds && isPromoted(art)) return { keep: false, reason: "ad" };
-    if (cfg.hideReposts && isRepost(art)) return { keep: false, reason: "repost" };
-    if (cfg.hideReplies && isReply(art)) return { keep: false, reason: "reply" };
+    const ctx = art.querySelector('[data-testid="socialContext"]');
 
-    const text = tweetText(art);
-    if (cfg.excludeRe && cfg.excludeRe.test(text)) {
-      return { keep: false, reason: "noise" };
-    }
-
-    const views = readViews(art);
-    // Counts mount a beat after the post does; let the caller retry before
-    // judging a post that simply has not rendered its numbers yet.
-    if (views == null) return { keep: false, reason: "measuring", retry: true };
-    if (views < cfg.minViews) return { keep: false, reason: "low views", views };
-
-    if (cfg.requireLaunch) {
-      const m = media(art);
-      const score =
-        (cfg.includeRe && cfg.includeRe.test(text) ? WEIGHTS.keyword : 0) +
-        (m.video ? WEIGHTS.video : 0) +
-        (m.card ? WEIGHTS.card : 0) +
-        (m.photo ? WEIGHTS.photo : 0);
-      if (score < LAUNCH_BAR) return { keep: false, reason: "off-topic", views };
-    }
-    return { keep: true, reason: "keep", views };
+    return {
+      views,
+      likes: parseCount(label, "like") || 0,
+      bookmarks: parseCount(label, "bookmark") || 0,
+      text,
+      hasVideo: !!art.querySelector(
+        '[data-testid="videoPlayer"], [data-testid="videoComponent"], video'
+      ),
+      hasPhoto: !!art.querySelector('[data-testid="tweetPhoto"]'),
+      hasCard: !!card,
+      isReply: isReplyEl(art),
+      isRepost: !!ctx && /reposted/i.test(ctx.textContent || ""),
+      isAd: isPromotedEl(art),
+    };
   }
 
-  return { DEFAULTS, INCLUDE, EXCLUDE, buildConfig, decide, readViews, parseViews };
+  const decide = (art, cfg) => judge(fromArticle(art), cfg);
+
+  return {
+    DEFAULTS, INCLUDE, EXCLUDE,
+    buildConfig, judge, fromApi, fromArticle, decide,
+    parseViews, parseCount,
+  };
 })();

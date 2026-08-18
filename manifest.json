@@ -34,6 +34,18 @@
         "*://twitter.com/*",
         "*://www.twitter.com/*"
       ],
+      "js": ["src/scoring.js", "src/intercept.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://x.com/*",
+        "*://www.x.com/*",
+        "*://twitter.com/*",
+        "*://www.twitter.com/*"
+      ],
       "css": ["src/filter.css"],
       "js": ["src/scoring.js", "src/content.js"],
       "run_at": "document_start",

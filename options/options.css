@@ -46,6 +46,8 @@ h2 { margin: 0; font-size: 13px; font-weight: 600; color: #6b6b74; text-transfor
 
 .field { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; }
 .field.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.field em { display: block; font-style: normal; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.field select { flex: none; }
 
 select, textarea {
   padding: 9px 12px;

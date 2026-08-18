@@ -15,25 +15,57 @@
         </div>
       </header>
 
-      <div class="notice" id="notice" hidden>
-        Settings are read-only while the filter is on. Turning the view floor
-        down would be an unlock with none of the friction, so it takes the same
-        route: open the extension popup and run the unlock steps.
-      </div>
-
       <section>
         <h2>The bar</h2>
         <label class="field">
           <span>Minimum views</span>
           <select id="minViews">
+            <option value="0">no floor</option>
+            <option value="5000">5k</option>
             <option value="10000">10k</option>
             <option value="25000">25k</option>
             <option value="50000">50k</option>
             <option value="100000">100k</option>
             <option value="250000">250k</option>
             <option value="500000">500k</option>
+            <option value="1000000">1M</option>
           </select>
         </label>
+
+        <label class="field">
+          <span>Minimum like rate <em>likes as a % of views</em></span>
+          <select id="minLikeRate">
+            <option value="0">off</option>
+            <option value="0.25">0.25%</option>
+            <option value="0.5">0.5%</option>
+            <option value="1">1%</option>
+            <option value="2">2%</option>
+            <option value="3">3%</option>
+            <option value="5">5%</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Minimum bookmark rate <em>bookmarks as a % of views</em></span>
+          <select id="minBookmarkRate">
+            <option value="0">off</option>
+            <option value="0.05">0.05%</option>
+            <option value="0.1">0.1%</option>
+            <option value="0.25">0.25%</option>
+            <option value="0.5">0.5%</option>
+            <option value="1">1%</option>
+          </select>
+        </label>
+
+        <p class="hint">
+          Measured on a live sample of this feed: median post 942 views, median
+          like rate 0.59%, median bookmark rate 0.01%. Reach and engagement rate
+          pull <em>against</em> each other — a 2M-view post in that sample ran
+          0.5% likes and 0.19% bookmarks, both below what small posts manage. So
+          stacking a high view floor with a high rate floor returns nothing.
+          Pick one to lead with. Bookmark rate is the best "this was worth
+          keeping" signal; 0.1% is already strong.
+        </p>
         <label class="check">
           <input type="checkbox" id="requireLaunch" />
           <span>

@@ -1,6 +1,8 @@
-// Settings are editable only while the filter is unlocked. Otherwise dropping
-// the view floor to zero would be an unlock that skips the whole gauntlet.
+// Freely editable, on purpose. Tuning the bars is the main thing you do with
+// this extension, and locking that behind the unlock made experimenting worse
+// without making the filter meaningfully harder to defeat.
 
+const NUMS = ["minViews", "minLikeRate", "minBookmarkRate"];
 const BOOLS = [
   "requireLaunch",
   "hideAds",
@@ -35,25 +37,24 @@ function renderChips(id, terms) {
 
 async function init() {
   const stored = await chrome.storage.local.get(self.XLF.DEFAULTS);
-  const locked = stored.enabled && Date.now() >= (stored.unlockUntil || 0);
+  const on = stored.enabled && Date.now() >= (stored.unlockUntil || 0);
 
-  document.getElementById("lockstate").textContent = locked
-    ? "filter on — settings locked"
-    : "filter off — settings editable";
-  document.getElementById("notice").hidden = !locked;
+  document.getElementById("lockstate").textContent = on
+    ? "filter on"
+    : "filter off — changes apply when it comes back on";
 
-  const minViews = document.getElementById("minViews");
-  minViews.value = String(stored.minViews);
-  minViews.disabled = locked;
-  minViews.addEventListener("change", () => {
-    chrome.storage.local.set({ minViews: Number(minViews.value) });
-    flashSaved();
+  NUMS.forEach((k) => {
+    const el = document.getElementById(k);
+    el.value = String(stored[k] ?? 0);
+    el.addEventListener("change", () => {
+      chrome.storage.local.set({ [k]: Number(el.value) });
+      flashSaved();
+    });
   });
 
   BOOLS.forEach((k) => {
     const el = document.getElementById(k);
     el.checked = !!stored[k];
-    el.disabled = locked;
     el.addEventListener("change", () => {
       chrome.storage.local.set({ [k]: el.checked });
       flashSaved();
@@ -63,7 +64,6 @@ async function init() {
   TEXTS.forEach((k) => {
     const el = document.getElementById(k);
     el.value = stored[k] || "";
-    el.disabled = locked;
     let t = 0;
     el.addEventListener("input", () => {
       clearTimeout(t);

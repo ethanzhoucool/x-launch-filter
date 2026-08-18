@@ -74,6 +74,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .primary:hover:not(:disabled) { background: #ffffff; }
 .ghost { background: #141418; color: #d8d8de; border-color: #23232a; }
 .ghost:hover:not(:disabled) { background: #1a1a20; }
+.ghost.on { background: #10263a; color: #7cc0f5; border-color: #1d9bf0; }
 .danger { background: #1a1113; color: #ff6b60; border-color: #3a1c1c; }
 .danger:hover:not(:disabled) { background: #24161a; }
 .link {

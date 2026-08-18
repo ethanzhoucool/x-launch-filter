@@ -1,25 +1,39 @@
-// Runs at document_start. Walks the timeline as X mounts posts and hides the
-// cells that fail XLF.decide().
+// Isolated-world half of the extension. It does three things and deliberately
+// no longer filters the DOM: posts are now removed from the API response by
+// src/intercept.js, before X renders them.
 //
-// Why the layout takeover in filter.css matters: X positions every
-// cellInnerDiv absolutely with a cached translateY, so display:none on a cell
-// leaves a hole the virtualiser never closes (measured: hiding a cell does not
-// change any sibling's translateY). Its parent reserves scroll space with
-// min-height, not height, so switching the cells to position:relative lets them
-// flow and close ranks without starving the scroller.
+//  1. Bridges settings to the page world, which has no chrome.* access.
+//  2. Draws the counter, fed by what the interceptor actually dropped.
+//  3. Gates Explore / Trending.
 
 const HTML = document.documentElement;
 const DEFAULTS = self.XLF.DEFAULTS;
 
-let cfg = self.XLF.buildConfig({});
+let cfg = { ...DEFAULTS };
 let gateEl = null;
 let hudEl = null;
-
-// Keyed by article: the virtualiser recycles cells, so a cell is not a stable
-// identity for a decision.
-const decided = new WeakMap();
+let tally = { kept: 0, dropped: 0 };
 
 const filterOn = () => cfg.enabled && Date.now() >= cfg.unlockUntil;
+
+/* ---------- config bridge ---------- */
+
+// The interceptor runs in the page world and reads this attribute on every
+// response. Written at document_start so it is in place before X boots and
+// issues its first timeline request.
+function publishConfig() {
+  const payload = {};
+  for (const k of Object.keys(DEFAULTS)) {
+    if (k !== "history") payload[k] = cfg[k];
+  }
+  try {
+    HTML.setAttribute("data-xlf", JSON.stringify(payload));
+  } catch {
+    /* nothing useful to do */
+  }
+}
+
+/* ---------- surfaces ---------- */
 
 function surface() {
   const p = location.pathname;
@@ -28,8 +42,10 @@ function surface() {
     return "explore";
   if (p.startsWith("/search")) return "search";
   if (/^\/[A-Za-z0-9_]+\/status\//.test(p)) return "status";
-  if (p.startsWith("/i/") || p.startsWith("/messages") ||
-      p.startsWith("/notifications") || p.startsWith("/settings")) return "other";
+  if (
+    p.startsWith("/i/") || p.startsWith("/messages") ||
+    p.startsWith("/notifications") || p.startsWith("/settings")
+  ) return "other";
   if (/^\/[A-Za-z0-9_]+\/?$/.test(p)) return "profile";
   return "other";
 }
@@ -45,63 +61,11 @@ function filteringHere() {
 
 const gatedHere = () => filterOn() && cfg.blockExplore && surface() === "explore";
 
-/* ---------- the filtering pass ---------- */
+/* ---------- counter ---------- */
 
-function evaluate(art) {
-  const prev = decided.get(art);
-  if (prev && !prev.retry) return prev;
-
-  const attempts = (prev?.attempts || 0) + 1;
-  const d = self.XLF.decide(art, cfg);
-  d.attempts = attempts;
-
-  // A post whose view count never renders cannot clear a view floor, so after a
-  // few frames of waiting it is judged on what is actually there.
-  if (d.retry && attempts >= 4) {
-    d.retry = false;
-    d.reason = "no view count";
-  }
-  decided.set(art, d);
-  return d;
-}
-
-function pass() {
-  const active = filteringHere();
-  HTML.classList.toggle("xlf-flow", active);
-
-  if (!active) {
-    document
-      .querySelectorAll(".xlf-hide")
-      .forEach((c) => c.classList.remove("xlf-hide"));
-    setHud(null);
-    return;
-  }
-
-  let kept = 0;
-  let hidden = 0;
-  let pending = false;
-
-  for (const cell of document.querySelectorAll('[data-testid="cellInnerDiv"]')) {
-    // Cells without an article are the composer, separators and the sentinel
-    // that drives infinite scroll — never touch those.
-    const art = cell.querySelector('article[data-testid="tweet"]');
-    if (!art) continue;
-
-    const d = evaluate(art);
-    if (d.retry) pending = true;
-    cell.classList.toggle("xlf-hide", !d.keep);
-    if (d.keep) kept++;
-    else hidden++;
-  }
-
-  setHud({ kept, hidden });
-  return pending;
-}
-
-/* ---------- HUD ---------- */
-
-function setHud(counts) {
-  if (!counts || !cfg.showHud) {
+function setHud() {
+  const show = cfg.showHud && filteringHere() && !gatedHere();
+  if (!show) {
     hudEl?.remove();
     hudEl = null;
     return;
@@ -114,10 +78,25 @@ function setHud(counts) {
     hudEl.appendChild(document.createElement("span")).className = "xlf-hud-text";
     document.body.appendChild(hudEl);
   }
-  const n = Math.round(cfg.minViews / 1000);
-  hudEl.querySelector(".xlf-hud-text").textContent =
-    `${counts.kept} shown · ${counts.hidden} filtered · ${n}k+ launch posts`;
+  const bits = [`${tally.kept} shown`, `${tally.dropped} filtered`];
+  bits.push(`${Math.round(cfg.minViews / 1000)}k+`);
+  if (cfg.minLikeRate > 0) bits.push(`${cfg.minLikeRate}% likes`);
+  if (cfg.minBookmarkRate > 0) bits.push(`${cfg.minBookmarkRate}% saves`);
+  hudEl.querySelector(".xlf-hud-text").textContent = bits.join(" · ");
 }
+
+// The page world reports what it dropped; detail is a string so it survives the
+// world boundary intact.
+document.addEventListener("xlf:stats", (e) => {
+  try {
+    const s = JSON.parse(e.detail);
+    tally.kept += s.kept || 0;
+    tally.dropped += s.dropped || 0;
+    setHud();
+  } catch {
+    /* cosmetic */
+  }
+});
 
 /* ---------- explore gate ---------- */
 
@@ -142,8 +121,8 @@ function renderGate() {
     const submit = el("button", null, "Search");
     submit.type = "submit";
     form.append(input, submit);
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
       const q = input.value.trim();
       if (q) location.href = "/search?q=" + encodeURIComponent(q) + "&f=live";
     });
@@ -166,67 +145,43 @@ function renderGate() {
 function apply() {
   if (gatedHere()) {
     renderGate();
-    HTML.classList.remove("xlf-flow");
+    setHud();
     return;
   }
   HTML.classList.remove("xlf-gated");
-  pass();
+  setHud();
 }
 
 /* ---------- wiring ---------- */
 
 chrome.storage.local.get(DEFAULTS, (stored) => {
-  cfg = self.XLF.buildConfig(stored);
+  cfg = { ...DEFAULTS, ...stored };
+  publishConfig();
   apply();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  const next = {};
-  for (const [k, { newValue }] of Object.entries(changes)) next[k] = newValue;
-  cfg = self.XLF.buildConfig({ ...cfg, ...next });
-  // Thresholds may have moved, so every cached verdict is stale.
-  if ("minViews" in next || "requireLaunch" in next ||
-      "extraInclude" in next || "extraExclude" in next ||
-      "hideReplies" in next || "hideReposts" in next) {
-    document.querySelectorAll('article[data-testid="tweet"]')
-      .forEach((a) => decided.delete(a));
-  }
+  for (const [k, { newValue }] of Object.entries(changes)) cfg[k] = newValue;
+  publishConfig();
   apply();
 });
-
-// X is a SPA: posts stream in, and route changes never reload the document.
-const observer = new MutationObserver(() => schedule());
-let queued = false;
-function schedule() {
-  if (queued) return;
-  queued = true;
-  requestAnimationFrame(() => {
-    queued = false;
-    apply();
-  });
-}
-
-function startObserving() {
-  if (!document.body) return;
-  observer.observe(document.body, { childList: true, subtree: true });
-  apply();
-}
 
 let lastHref = location.href;
 setInterval(() => {
   if (location.href !== lastHref) {
     lastHref = location.href;
+    // Counts are per-surface; carrying them across a route change is noise.
+    tally = { kept: 0, dropped: 0 };
     apply();
   }
 }, 400);
 
-// Engagement counts render a beat after the post, and an unlock can expire
-// while the tab sits open.
-setInterval(apply, 1500);
+// An unlock can expire while the tab sits open.
+setInterval(apply, 2000);
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", startObserving, { once: true });
+  document.addEventListener("DOMContentLoaded", apply, { once: true });
 } else {
-  startObserving();
+  apply();
 }

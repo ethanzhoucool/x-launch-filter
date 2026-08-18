@@ -1,11 +1,12 @@
 # X Launch Filter
 
 X Launch Filter is an unpacked MV3 Chrome extension that reduces the X home
-timeline to high-reach launch and product posts. Everything else in the feed is
-hidden while it runs. It is for people who open X for product news and lose an
-hour to the feed instead.
+timeline to high-reach launch and product posts. It is for people who open X for
+product news and lose an hour to the feed instead.
 
-Turning the filter off is deliberately slow. There is no one-click switch.
+Failing posts are removed from X's API response before its renderer ever sees
+them, so the timeline it lays out is simply shorter. Nothing is hidden with CSS
+and no layout is overridden.
 
 ## Install
 
@@ -13,21 +14,23 @@ Turning the filter off is deliberately slow. There is no one-click switch.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Click **Load unpacked** and select the folder.
 4. Open `x.com/home`. A counter in the bottom-left corner reports how many posts
-   were kept and how many were hidden.
+   were kept and how many were dropped.
 
 ## How a post is judged
 
-Three things are dropped before anything is scored: promoted posts, replies, and
-anything matching a built-in noise list (politics, engagement bait, crypto,
-assorted time sinks).
+Dropped before anything is scored: promoted posts, replies, and anything
+matching a built-in noise list (politics, engagement bait, crypto, assorted time
+sinks).
 
-What survives has to clear two gates.
+What survives has to clear the bars you set.
 
-**A view floor.** 50,000 views by default, configurable from 10k to 500k. The
-count is read from the engagement bar's `aria-label`, which carries the exact
-number rather than the abbreviated one drawn on screen.
+**A view floor.** 50,000 by default, adjustable from none to 1M.
 
-**A launch score.** A weighted score that has to reach 2:
+**Engagement rates, both optional and both off by default.** Likes as a
+percentage of views, and bookmarks as a percentage of views. Bookmark rate is
+the best available "someone thought this was worth keeping" signal.
+
+**A launch score,** which has to reach 2:
 
 | signal | weight |
 | --- | --- |
@@ -39,16 +42,35 @@ number rather than the abbreviated one drawn on screen.
 A keyword alone passes. So does a wordless demo video that links out to the
 product. A video with nothing else does not.
 
-Both keyword lists are editable in the settings page, and your terms are added to
-the built-ins rather than replacing them.
+Both keyword lists are editable in the settings page, and your terms are added
+to the built-ins rather than replacing them.
+
+### Picking thresholds
+
+Measured across one live page of a real home timeline (81 posts):
+
+| metric | value |
+| --- | --- |
+| median views | 942 |
+| posts at or above 50k views | 10 of 81 |
+| median like rate | 0.59% |
+| median bookmark rate | 0.01% |
+| a 1.98M-view post | 0.5% likes, 0.19% bookmarks |
+
+The last row is the important one. **Reach and engagement rate pull against each
+other** — the biggest posts have lower like and bookmark rates than small ones,
+because reach outruns engagement. Stacking a high view floor on top of a high
+rate floor returns nothing at all. Lead with one or the other. On these numbers
+a 5% like-rate gate is unreachable, 1% is already above the median, and a 0.1%
+bookmark rate is strong.
 
 ## Where it applies
 
-- **Home timeline**: always filtered.
+- **Home timeline**: always filtered, both For You and Following.
 - **Explore and Trending**: blocked outright, behind a search box.
 - **Search and profiles**: untouched by default. Searching is the deliberate
-  behaviour this is trying to push you back toward, so it stays out of the way.
-  Both can be filtered from settings if you want them filtered.
+  behaviour this is trying to push you back toward. Both can be filtered from
+  settings.
 
 The popup also carries four one-click launch searches built from X's advanced
 operators. X search has no `min_views` operator, so those queries use
@@ -56,119 +78,130 @@ operators. X search has no `min_views` operator, so those queries use
 
 ## Turning it off
 
-The popup runs a gauntlet, in this order:
+Pick a duration and hold a button for a second and a half. That is the whole
+thing. The unlock is a fixed-length lease: the filter turns itself back on when
+the time is up, and the badge counts down the minutes.
 
-1. Three honesty questions. Each one has an answer that ends the run.
-2. A typed reason, at least 30 characters.
-3. A sentence typed out by hand. Pasting is blocked.
-4. A 20-second cooldown.
-5. A duration: 5, 15 or 30 minutes.
-6. A four-second press and hold.
+The friction is deliberately light. This is a work surface, and the failure mode
+it guards against is a reflex rather than a binge.
 
-The unlock is a fixed-length lease, never a permanent switch. The filter relocks
-itself on an alarm when the time is up. Progress through the gauntlet is saved,
-so closing the popup partway through resumes rather than restarts.
+## How the filtering works
 
-Settings are read-only while the filter is on. Dropping the view floor to 10k
-would otherwise be an unlock with none of the friction, so changing settings
-takes the same route as any other unlock.
+The interesting problem here is that you cannot usefully hide a post in X's
+timeline after it renders.
 
-This is friction, not a prison. It can still be disabled from
-`chrome://extensions`.
-
-## The virtualised timeline problem
-
-Hiding a post in X's timeline is not as simple as `display: none`. This is the
-part that took measuring on a live x.com session, and the part to re-check if X
-ships a timeline rewrite.
-
-Each post wrapper (`div[data-testid="cellInnerDiv"]`) is `position: absolute`
-with a cached `transform: translateY(...)`. Those offsets are computed once and
-stored. They are not derived from layout.
-
-Three measurements on a live timeline:
+X's timeline is a virtualised list. Each post wrapper
+(`div[data-testid="cellInnerDiv"]`) is `position: absolute` with a cached
+`transform: translateY(...)`, and only five to ten of them exist in the DOM at a
+time. Those offsets are computed once at mount. They are not derived from
+layout. Three measurements on a live timeline:
 
 - Hiding one wrapper with `display: none` left every sibling's `translateY`
   byte-for-byte identical. The list does not reflow, so a hidden post leaves a
-  permanent hole where it used to be.
+  permanent hole.
 - Collapsing a wrapper's contents to zero height did not move siblings either.
-  The wrapper's own height went from 645px to 0px and nothing around it shifted.
-- The parent sizer reserves scroll space with `min-height` (observed at
-  11497.5px), not a fixed `height`.
+  Its own height went from 645px to 0px and nothing around it shifted.
+- The parent reserves scroll space with `min-height` (observed at 11497.5px),
+  not a fixed `height`, and hiding posts never shrinks it.
 
-The third measurement is the opening. Because the reserved scroll space is a
-floor rather than a fixed number, the wrappers can be pulled out of absolute
-positioning without starving the scroller. Forcing them to `position: relative`
-with `transform: none` puts them into normal flow, where they close ranks
-around a hidden sibling. Measured across eight cells, the gap was zero.
+Together those mean any DOM-level approach either leaves holes or has to seize
+layout from the component whose entire job is layout. An earlier version of this
+extension did the latter, forcing the wrappers into normal flow. It closed the
+gaps and created worse problems: the reserved scroll space stayed, so a heavily
+filtered feed became a short column above thousands of pixels of nothing.
 
-That is one rule in `src/filter.css`, gated on `html.xlf-flow`, and it is applied
-only while the filter is actually running:
+So the filtering moved upstream, into the response itself.
 
-```css
-html.xlf-flow [aria-label^="Timeline: "] > div > div[data-testid="cellInnerDiv"] {
-  position: relative !important;
-  transform: none !important;
-  top: auto !important;
-  left: auto !important;
-}
-```
+`src/intercept.js` runs in the page's own world at `document_start`, before X's
+bundle loads, and patches the `responseText` and `response` getters on
+`XMLHttpRequest.prototype`. Patching the getters rather than adding a load
+listener means it does not matter whether X registered its own handlers first —
+the body is filtered on read, whenever that happens. `fetch` is patched too, in
+case X moves.
 
-If X changes and posts stop being filtered, look at the selectors in
-`src/scoring.js` (`[role="group"][aria-label]` for views,
-`[data-testid="tweetText"]`, `[data-testid="videoPlayer"]`). If gaps appear in
-the feed instead, look at the layout takeover above and check whether the
-wrappers' parent still sizes itself with `min-height`.
+Verified against a live `HomeTimeline` response:
+
+- Transport is XHR and the request is a GET, with `count: 20` in the query
+  string.
+- Entries live at `data.home.home_timeline_urt.instructions[n].entries`. The
+  walk finds them structurally, by looking for an array of objects carrying an
+  `entryId`, so a reshuffle upstream does not break it.
+- Entry ids are prefixed `cursor-`, `tweet-` and `home-conversation-`.
+- A single post sits at `content.itemContent.tweet_results.result`; a
+  conversation module carries `content.items[].item.itemContent.tweet_results.result`
+  and is judged by its root post, so a thread is kept or dropped whole.
+- `views.count` is a string; likes and bookmarks are `legacy.favorite_count` and
+  `legacy.bookmark_count`. Long posts truncate `full_text`, so `note_tweet`
+  carries the real text.
+
+**Cursor entries are never touched.** They are how pagination continues, and
+dropping one ends the timeline permanently.
+
+On a live response this reduced 37 entries to 7 — 35 posts judged, 30 dropped,
+both the Top and Bottom cursors preserved, survivors at 3.5M, 1.4M, 157k, 98k
+and 84k views.
+
+Every failure path returns the response untouched. An unfiltered feed is a bad
+day; a broken timeline is a bug report.
+
+### If X changes
+
+- **Posts stop being filtered** → the operation names and entry paths in
+  `src/intercept.js`, and the field names in `XLF.fromApi()`.
+- **The timeline breaks entirely** → disable the extension and check whether
+  `filterPayload` is dropping cursor entries.
 
 ## Known limitations
 
-**Very little survives.** The two gates multiply, and a normal feed is mostly
-neither high-reach nor a launch. In one live sample, 0 of 5 posts passed. The
-view counts read 29,468, 7,383, 20,338 and 7,758, all under the 50k floor before
-the launch score even mattered. The column can legitimately go empty. Lowering
-the floor in settings is the fix, and it is a real fix, not a workaround.
+**Very little survives, by design.** The gates multiply. In one live sample the
+filter kept 5 posts out of 35 judged, and with the launch-keyword requirement on
+top it has kept as few as 1 out of 21. An empty column is a real outcome, not a
+bug. Lower the view floor in settings.
 
-**Hidden posts do not give back their scroll space.** The parent's `min-height`
-is what keeps the scroller alive, and nothing shrinks it when posts are hidden.
-A heavily filtered feed therefore leaves a tall, mostly empty scroll region below
-the posts that survived.
+**No page top-up yet.** When a page of 20 posts yields one keeper, the extension
+returns one post and waits for X to ask for more. Because the rendered page is
+genuinely short, X's own "load more" trigger should fire on its own — but the
+extension does not yet follow the bottom cursor to fetch and merge extra pages
+itself, which would guarantee a full screen instead of relying on that.
 
-**The layout takeover fights the virtualiser.** Posts are put into normal flow
-while X's virtualiser continues to recycle and reposition them. Content is
-expected to shift upward as you scroll because of this. That is reasoned from the
-measurements above, not something observed in a long scrolling session, so treat
-it as a prediction rather than a report.
+**The config bridge has a startup race.** Settings reach the page world through
+a `data-xlf` attribute written by the isolated content script, whose storage
+read is asynchronous. If X's very first timeline request beat it, the
+interceptor falls back to filtering with default settings. In practice X's
+bundle boots long after, and the protective default is the intended state
+anyway.
 
-**Planned, not built:** filter X's timeline API response before its renderer ever
-sees it, using a `world: "MAIN"` content script, and fetch extra pages when too
-few posts survive a batch. That would remove the CSS layout takeover entirely and
-take both limitations above with it. None of it exists yet.
+**Counts are per-surface.** The corner counter resets on route changes.
 
 ## Testing the classifier without a browser
 
-The classifier hangs off `self.XLF` in `src/scoring.js` and has no DOM dependency
-beyond `querySelector`, so a stub object is enough to exercise `XLF.decide()` in
-node:
+The classifier hangs off `self.XLF` in `src/scoring.js`, is shared by both the
+API and DOM paths, and has no dependency on `chrome.*` or on a real DOM:
 
 ```js
-const fake = {
-  querySelector: (sel) =>
-    sel.includes("aria-label") ? { getAttribute: () => "12 replies, 40 likes, 84,000 views" } : null,
-  querySelectorAll: () => [],
-};
-XLF.decide(fake, XLF.buildConfig({}));
+global.self = global;
+require("./src/scoring.js");
+const cfg = self.XLF.buildConfig({});
+
+self.XLF.judge(self.XLF.fromApi({
+  __typename: "Tweet",
+  views: { count: "120000" },
+  legacy: { full_text: "Introducing our editor. Launching today", favorite_count: 900,
+            bookmark_count: 40, extended_entities: { media: [{ type: "video" }] } },
+}), cfg);   // → { keep: true, reason: "keep", stats: { ... } }
 ```
 
 ## Files
 
 ```
 manifest.json
-src/scoring.js       the classifier: keyword lists, view parsing, the verdict
-src/content.js       walks the timeline, hides cells, draws the counter and gate
-src/filter.css       the layout takeover, the counter, the Explore gate
+src/scoring.js       the classifier: keyword lists, the bars, the verdict
+src/intercept.js     page world: filters posts out of the API response
+src/content.js       isolated world: config bridge, counter, Explore gate
+src/filter.css       the counter and the Explore gate
 src/background.js    lock state, relock alarm, badge
-popup/               status, launch searches, the unlock gauntlet
-options/             thresholds and keywords, locked while the filter is on
+popup/               status, launch searches, hold-to-unlock
+options/             view floor, engagement rates, keywords
 icons/make_icons.py  regenerates the PNGs, no dependencies
 ```
 
