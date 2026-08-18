@@ -114,7 +114,13 @@ function setHud() {
     });
     document.body.appendChild(hudEl);
   }
-  const bits = [`${tally.kept} shown`, `${tally.dropped} filtered`];
+  // 0 shown / 0 filtered reads like a broken extension. It actually means no
+  // posts reached the filter at all, which is a different problem from a bar
+  // nothing clears, and the two need different fixes.
+  const bits = [];
+  if (!tally.kept && !tally.dropped) bits.push("no posts to filter yet");
+  else if (!tally.kept) bits.push(`nothing cleared the bar · ${tally.dropped} filtered`);
+  else bits.push(`${tally.kept} shown`, `${tally.dropped} filtered`);
   bits.push(`${Math.round(cfg.minViews / 1000)}k+`);
   if (cfg.minLikeRate > 0) bits.push(`${cfg.minLikeRate}% likes`);
   if (cfg.minBookmarkRate > 0) bits.push(`${cfg.minBookmarkRate}% saves`);
@@ -235,6 +241,33 @@ function buildPanel() {
     closePanel();
   });
 
+  // A follower ceiling caps reach; a view floor demands it. Set both hard enough
+  // and you are asking for posts that outran their author's whole audience,
+  // which is rare enough to empty the feed. Say so before it happens.
+  const warn = el("div", "xlf-warn");
+  warn.hidden = true;
+  const checkCombo = () => {
+    const v = Number(views.value);
+    const f = Number(followers.value);
+    if (!v || !f) {
+      warn.hidden = true;
+      return;
+    }
+    const ratio = v / f;
+    if (ratio < 1) {
+      warn.hidden = true;
+      return;
+    }
+    const nice = ratio >= 2 ? `${Math.round(ratio)}x` : "past";
+    warn.textContent =
+      `Every post would have to reach ${nice} its author's whole audience. ` +
+      `That is rare, so expect very few posts — or none.`;
+    warn.hidden = false;
+  };
+  views.addEventListener("change", checkCombo);
+  followers.addEventListener("change", checkCombo);
+  checkCombo();
+
   const actions = el("div", "xlf-actions");
   actions.append(save, cancel);
 
@@ -245,6 +278,7 @@ function buildPanel() {
     panelRow("Bookmark rate", marks),
     panelRow("Max followers", followers),
     panelRow("Below-bar filler", filler),
+    warn,
     launchRow,
     actions,
     more

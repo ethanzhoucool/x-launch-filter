@@ -227,3 +227,13 @@ html.xlf-gated #xlf-gate {
   text-align: left;
 }
 #xlf-panel .xlf-link:hover { color: #9b9ba3; }
+
+#xlf-panel .xlf-warn {
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #2a2013;
+  border: 1px solid #5a4526;
+  color: #d9954a;
+  font-size: 11.5px;
+  line-height: 1.45;
+}

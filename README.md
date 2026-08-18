@@ -44,6 +44,15 @@ usually the interesting case.
 An author whose follower count cannot be read is never dropped by this gate.
 The DOM path cannot see follower counts at all, so it never applies there.
 
+**Do not stack it against a high view floor.** A follower ceiling caps reach and
+a view floor demands it, so together they ask for posts that outran their
+author's entire audience. 100k views from an account under 50k followers means
+every post must reach twice everyone who follows it. That is rare enough to
+empty the feed, and with the filler off X will decide you have no timeline and
+show its new-user welcome screen. The panel warns when the two dials are set
+against each other. Pair a follower ceiling with a *low* view floor: 10k to 25k
+is where breakout posts from small accounts actually live.
+
 **A launch score,** which has to reach 2:
 
 | signal | weight |
