@@ -7,9 +7,27 @@
 //  3. Gates Explore / Trending.
 
 const HTML = document.documentElement;
-const DEFAULTS = self.XLF.DEFAULTS;
 
-let cfg = { ...DEFAULTS };
+// Deliberately self-contained: this file must not depend on src/scoring.js.
+// Chrome injects a given script file once even when two content_scripts entries
+// list it, so scoring.js lands in the MAIN world for the interceptor and never
+// arrives here — reading self.XLF threw on load and took the whole bridge with
+// it. These are only the settings this half reads; everything in storage is
+// bridged verbatim, so there is no key list to drift out of sync.
+const LOCAL = {
+  enabled: true,
+  unlockUntil: 0,
+  minViews: 50000,
+  minLikeRate: 0,
+  minBookmarkRate: 0,
+  blockExplore: true,
+  showHud: true,
+  filterSearch: false,
+  filterProfiles: false,
+};
+
+let stored = {};
+let cfg = { ...LOCAL };
 let gateEl = null;
 let hudEl = null;
 let tally = { kept: 0, dropped: 0 };
@@ -18,14 +36,16 @@ const filterOn = () => cfg.enabled && Date.now() >= cfg.unlockUntil;
 
 /* ---------- config bridge ---------- */
 
-// The interceptor runs in the page world and reads this attribute on every
-// response. Written at document_start so it is in place before X boots and
-// issues its first timeline request.
+// The interceptor runs in the page world, which has no chrome.* access, and
+// reads this attribute on every response. Written at document_start so it is in
+// place before X boots and issues its first timeline request.
+//
+// If this never runs the interceptor filters nothing, by design: a dead bridge
+// must not leave a page that is filtered with no way to switch it off.
 function publishConfig() {
-  const payload = {};
-  for (const k of Object.keys(DEFAULTS)) {
-    if (k !== "history") payload[k] = cfg[k];
-  }
+  const payload = { ...stored };
+  delete payload.history;
+  delete payload.progress;
   try {
     HTML.setAttribute("data-xlf", JSON.stringify(payload));
   } catch {
@@ -154,15 +174,19 @@ function apply() {
 
 /* ---------- wiring ---------- */
 
-chrome.storage.local.get(DEFAULTS, (stored) => {
-  cfg = { ...DEFAULTS, ...stored };
+chrome.storage.local.get(null, (all) => {
+  stored = all || {};
+  cfg = { ...LOCAL, ...stored };
   publishConfig();
   apply();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  for (const [k, { newValue }] of Object.entries(changes)) cfg[k] = newValue;
+  for (const [k, { newValue }] of Object.entries(changes)) {
+    stored[k] = newValue;
+    cfg[k] = newValue;
+  }
   publishConfig();
   apply();
 });

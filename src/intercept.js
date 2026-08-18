@@ -40,16 +40,26 @@
   /* ---------- config, bridged from the isolated content script ---------- */
 
   function config() {
-    let stored = {};
+    let stored = null;
     try {
       const raw = document.documentElement.getAttribute("data-xlf");
       if (raw) stored = JSON.parse(raw);
     } catch {
-      /* fall through to defaults */
+      stored = null;
     }
-    const cfg = self.XLF.buildConfig(stored);
-    // Absent config means the bridge has not landed yet. Default to filtering:
-    // the protective state is the one the user asked for.
+
+    const cfg = self.XLF.buildConfig(stored || {});
+
+    // No bridge means no settings, and critically no way for the popup to turn
+    // this off — the off switch travels through that same attribute. Filtering
+    // on regardless would leave a modified feed with no escape, so absence is
+    // treated as off. This is not the paranoid choice, it is the recoverable
+    // one: worst case you get an unfiltered timeline and a working browser.
+    if (!stored) {
+      cfg.filterOn = false;
+      return cfg;
+    }
+
     cfg.filterOn = cfg.enabled !== false && Date.now() >= (cfg.unlockUntil || 0);
     return cfg;
   }

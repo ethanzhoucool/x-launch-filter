@@ -3,14 +3,19 @@
   "name": "X Launch Filter",
   "version": "1.0.0",
   "description": "Keeps only high-view launch and product posts in the X timeline. Turning the filter off takes effort.",
-  "permissions": ["storage", "alarms"],
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
   "host_permissions": [
     "*://x.com/*",
     "*://www.x.com/*",
     "*://twitter.com/*",
     "*://www.twitter.com/*"
   ],
-  "background": { "service_worker": "src/background.js" },
+  "background": {
+    "service_worker": "src/background.js"
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "X Launch Filter",
@@ -25,7 +30,10 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "options_ui": { "page": "options/options.html", "open_in_tab": true },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
   "content_scripts": [
     {
       "matches": [
@@ -34,7 +42,10 @@
         "*://twitter.com/*",
         "*://www.twitter.com/*"
       ],
-      "js": ["src/scoring.js", "src/intercept.js"],
+      "js": [
+        "src/scoring.js",
+        "src/intercept.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start",
       "all_frames": false
@@ -46,8 +57,12 @@
         "*://twitter.com/*",
         "*://www.twitter.com/*"
       ],
-      "css": ["src/filter.css"],
-      "js": ["src/scoring.js", "src/content.js"],
+      "css": [
+        "src/filter.css"
+      ],
+      "js": [
+        "src/content.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }

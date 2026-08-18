@@ -176,12 +176,22 @@ The header replay it depends on does work — replaying X's own signed headers o
 a cursor URL returns 200 with a further cursor — so the idea is sound and the
 delivery is what needs solving.
 
-**The config bridge has a startup race.** Settings reach the page world through
-a `data-xlf` attribute written by the isolated content script, whose storage
-read is asynchronous. If X's very first timeline request beat it, the
-interceptor falls back to filtering with default settings. In practice X's
-bundle boots long after, and the protective default is the intended state
-anyway.
+**The config bridge fails open, on purpose.** Settings reach the page world
+through a `data-xlf` attribute written by the isolated content script, whose
+storage read is asynchronous. Until it lands, the interceptor filters nothing.
+
+That fallback is deliberate and was chosen the hard way. The off switch travels
+through this same attribute, so if the content script dies the interceptor also
+loses the only way to be turned off — filtering regardless would leave a
+modified feed with no escape short of uninstalling. Failing open costs at most
+an unfiltered first page. In practice X's bundle boots hundreds of milliseconds
+after the bridge lands, so it does not come up.
+
+Related: `src/content.js` deliberately does not depend on `src/scoring.js`.
+Chrome injects a script file once even when two `content_scripts` entries list
+it, so `scoring.js` goes to the MAIN world for the interceptor and never arrives
+in the isolated world. Reading `self.XLF` there threw on load and took the
+bridge down with it.
 
 **Counts are per-surface.** The corner counter resets on route changes.
 
