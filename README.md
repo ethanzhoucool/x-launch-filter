@@ -87,6 +87,30 @@ rate floor returns nothing at all. Lead with one or the other. On these numbers
 a 5% like-rate gate is unreachable, 1% is already above the median, and a 0.1%
 bookmark rate is strong.
 
+## Search as the feed
+
+The algorithmic timeline is roughly 88% below any useful bar, which is what made
+everything else here hard: a filter strict enough to be useful empties the page,
+and an empty page is what ends infinite scroll.
+
+Turning on **Use search as the feed** redirects `x.com/home` to one of X's own
+search queries instead. The server does the coarse filtering and paginates
+natively, so what arrives is already mostly relevant and the gates trim it
+rather than gut it. Nothing else on X is touched.
+
+X search has no `min_views`, so the view floor is converted to `min_faves:`
+using the like rate measured on a live feed — about 0.6% of views, so roughly
+views divided by 170. Checked against live results, `min_faves:150` lands around
+a 25k-view median. The exact view floor and follower ceiling are still enforced
+on the results, so the conversion only has to be approximately right.
+
+The query is built from your settings and shown in the panel before you commit
+to it. **Keep the launch-signal requirement on when using this.** The query is
+deliberately loose to buy recall, and "launch" has senses that no search
+operator separates: the first live test returned a ballistic-missile report as
+its top hit. The launch score is what removes those — a news post carrying video
+still scores 1 against a bar of 2.
+
 ## Where it applies
 
 - **Home timeline**: always filtered, both For You and Following.

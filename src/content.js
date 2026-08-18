@@ -23,6 +23,10 @@ const LOCAL = {
   maxFollowers: 0,
   requireLaunch: true,
   minPerPage: 2,
+  searchFeed: false,
+  searchLatest: true,
+  searchVideoOnly: false,
+  searchQuery: "",
   blockExplore: true,
   showHud: true,
   filterSearch: false,
@@ -56,6 +60,53 @@ function publishConfig() {
   }
 }
 
+/* ---------- search as the feed ---------- */
+
+// X's search filters server-side and paginates natively, which sidesteps the
+// whole problem the algorithmic timeline creates: there, a strict bar empties
+// the page and an empty page ends the feed. Here the pool arriving is already
+// mostly good, so the gates trim rather than gut it.
+//
+// The catch is that X search has no min_views operator. Measured on a live
+// feed, likes run about 0.6% of views, so likes x ~170 approximates reach —
+// that ratio is the only available bridge from the view floor you set to
+// something the server can actually enforce.
+const LIKES_PER_VIEW = 0.006;
+
+// Phrases, not bare words. "launch" on its own matches missile launches, rocket
+// launches and launch parties — the first live test of this query returned a
+// ballistic missile report as its top hit. Every term here only really occurs
+// around a product.
+const SEARCH_TERMS = [
+  '"just shipped"', '"just launched"', '"we launched"', '"launching today"',
+  '"now live"', '"built this"', '"product hunt"', '"open source"',
+  '"new app"', "waitlist", "introducing",
+];
+
+function buildSearchQuery(c) {
+  if (c.searchQuery && c.searchQuery.trim()) return c.searchQuery.trim();
+  const parts = [`(${SEARCH_TERMS.join(" OR ")})`];
+  const faves = Math.round((c.minViews || 0) * LIKES_PER_VIEW);
+  if (faves >= 10) parts.push(`min_faves:${faves}`);
+  if (c.searchVideoOnly) parts.push("filter:native_video");
+  parts.push("-filter:replies", "lang:en");
+  return parts.join(" ");
+}
+
+const searchFeedUrl = (c) =>
+  "/search?q=" + encodeURIComponent(buildSearchQuery(c)) +
+  "&f=" + (c.searchLatest ? "live" : "top");
+
+// Only ever fires on the home path, so it cannot loop: the destination is
+// /search, which is not a redirect source.
+function maybeRedirectHome() {
+  if (!filterOn() || !cfg.searchFeed) return false;
+  const p = location.pathname;
+  if (p !== "/" && p !== "/home") return false;
+  location.replace(searchFeedUrl(cfg));
+  return true;
+}
+
 /* ---------- surfaces ---------- */
 
 function surface() {
@@ -77,7 +128,7 @@ function filteringHere() {
   if (!filterOn()) return false;
   const s = surface();
   if (s === "home") return true;
-  if (s === "search") return cfg.filterSearch;
+  if (s === "search") return cfg.filterSearch || cfg.searchFeed;
   if (s === "profile") return cfg.filterProfiles;
   return false;
 }
@@ -231,6 +282,9 @@ function buildPanel() {
         requireLaunch: launch.checked,
         minPerPage: Number(filler.value),
         maxFollowers: Number(followers.value),
+        searchFeed: useSearch.checked,
+        searchLatest: latest.checked,
+        searchVideoOnly: vidOnly.checked,
       },
       () => location.reload()
     );
@@ -268,6 +322,45 @@ function buildPanel() {
   followers.addEventListener("change", checkCombo);
   checkCombo();
 
+  // Search-as-feed. Shown with the query it will actually run, because a
+  // generated search you cannot see is impossible to trust or debug.
+  const useSearch = document.createElement("input");
+  useSearch.type = "checkbox";
+  useSearch.checked = !!cfg.searchFeed;
+  const useSearchRow = el("label", "xlf-check");
+  useSearchRow.append(useSearch, el("span", null, "Use search as the feed"));
+
+  const latest = document.createElement("input");
+  latest.type = "checkbox";
+  latest.checked = cfg.searchLatest !== false;
+  const latestRow = el("label", "xlf-check xlf-sub");
+  latestRow.append(latest, el("span", null, "Newest first (off = top posts)"));
+
+  const vidOnly = document.createElement("input");
+  vidOnly.type = "checkbox";
+  vidOnly.checked = !!cfg.searchVideoOnly;
+  const vidRow = el("label", "xlf-check xlf-sub");
+  vidRow.append(vidOnly, el("span", null, "Video posts only"));
+
+  const preview = el("div", "xlf-query");
+
+  const refreshSearch = () => {
+    const on = useSearch.checked;
+    latestRow.hidden = !on;
+    vidRow.hidden = !on;
+    preview.hidden = !on;
+    if (!on) return;
+    preview.textContent = buildSearchQuery({
+      ...cfg,
+      minViews: Number(views.value),
+      searchVideoOnly: vidOnly.checked,
+    });
+  };
+  [useSearch, vidOnly, views].forEach((n) =>
+    n.addEventListener("change", refreshSearch)
+  );
+  refreshSearch();
+
   const actions = el("div", "xlf-actions");
   actions.append(save, cancel);
 
@@ -280,6 +373,10 @@ function buildPanel() {
     panelRow("Below-bar filler", filler),
     warn,
     launchRow,
+    useSearchRow,
+    latestRow,
+    vidRow,
+    preview,
     actions,
     more
   );
@@ -353,6 +450,7 @@ function renderGate() {
 }
 
 function apply() {
+  if (maybeRedirectHome()) return;
   if (gatedHere()) {
     renderGate();
     setHud();

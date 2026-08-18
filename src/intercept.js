@@ -77,7 +77,7 @@
   const appliesTo = (opName, cfg) => {
     const surface = OPS[opName];
     if (surface === "home") return true;
-    if (surface === "search") return !!cfg.filterSearch;
+    if (surface === "search") return !!cfg.filterSearch || !!cfg.searchFeed;
     if (surface === "profile") return !!cfg.filterProfiles;
     return false;
   };

@@ -146,6 +146,54 @@
       </section>
 
       <section>
+        <h2>Search as the feed</h2>
+        <p class="hint">
+          X's search filters on the server and paginates natively, so what
+          arrives is already mostly good and the gates above trim it rather than
+          empty it. This is the sturdier setup: the algorithmic timeline is
+          roughly 88% below any useful bar, and a page filtered to nothing is
+          what ends infinite scroll.
+        </p>
+        <label class="check">
+          <input type="checkbox" id="searchFeed" />
+          <span>
+            Open a search instead of the home timeline
+            <em>x.com/home redirects to the query below. Everything else on X
+            is untouched.</em>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="searchLatest" />
+          <span>
+            Newest first
+            <em>Off sorts by top posts, which are better but go stale within a
+            day. On is fresher, and the like floor keeps the quality up.</em>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="searchVideoOnly" /><span>Video posts only</span>
+        </label>
+        <label class="field col">
+          <span>Custom query <em>leave empty to build one from the settings above</em></span>
+          <textarea id="searchQuery" rows="3" placeholder="(launch OR launching OR &quot;just shipped&quot;) min_faves:150 -filter:replies lang:en"></textarea>
+        </label>
+        <p class="hint">
+          Keep <strong>Require launch signals</strong> on when using this. The
+          query buys recall and it is deliberately loose: phrases like "now
+          live" and "introducing" also show up in news copy, and a live test of
+          it returned a ballistic-missile report and two Iran stories alongside
+          the product posts. The launch score is what cuts those, since a news
+          post with video still scores 1 against a bar of 2.
+        </p>
+        <p class="hint">
+          X search has no <code>min_views</code>, so the view floor is converted
+          to <code>min_faves:</code> using the like rate measured on a live feed
+          (about 0.6% of views, so roughly views &divide; 170). The exact view
+          floor and the follower ceiling are still enforced here, on the results.
+        </p>
+      </section>
+
+      <section>
         <h2>Your keywords</h2>
         <p class="hint">
           One per line, or comma separated. These add to the built-in lists

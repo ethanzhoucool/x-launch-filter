@@ -20,6 +20,13 @@ const DEFAULTS = {
   extraInclude: "",
   extraExclude: "",
   debug: false,
+  // Use X's own server-side search as the feed instead of the algorithmic
+  // timeline. The server does the coarse filtering, so what arrives is
+  // mostly good and our gates drop a little rather than nearly everything.
+  searchFeed: false,
+  searchLatest: true,
+  searchVideoOnly: false,
+  searchQuery: "",
   history: [],
 };
 

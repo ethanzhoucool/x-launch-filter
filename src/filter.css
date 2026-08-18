@@ -237,3 +237,19 @@ html.xlf-gated #xlf-gate {
   font-size: 11.5px;
   line-height: 1.45;
 }
+
+#xlf-panel .xlf-check.xlf-sub { margin-left: 18px; font-size: 12px; }
+
+#xlf-panel .xlf-query {
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #101015;
+  border: 1px solid #2a2a32;
+  color: #7cc0f5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  word-break: break-word;
+  max-height: 88px;
+  overflow-y: auto;
+}

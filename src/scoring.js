@@ -39,6 +39,13 @@ self.XLF = (() => {
     extraInclude: "",
     extraExclude: "",
     debug: false,
+    // Use X's own server-side search as the feed instead of the algorithmic
+    // timeline. The server does the coarse filtering, so what arrives is
+    // mostly good and our gates drop a little rather than nearly everything.
+    searchFeed: false,
+    searchLatest: true,
+    searchVideoOnly: false,
+    searchQuery: "",
     history: [],
   };
 
@@ -74,6 +81,10 @@ self.XLF = (() => {
     "trump", "biden", "election", "democrat", "republican", "congress",
     "senate", "liberal", "conservative", "woke", "maga",
     "left wing", "right wing", "israel", "palestine", "gaza", "ukraine",
+    // "launch" has a military sense that search operators cannot separate
+    "missile", "ballistic", "airstrike", "warhead", "ceasefire", "iran",
+    "syria", "nuclear", "state tv", "foreign minister", "prime minister",
+    "sanctions", "hostage", "troops",
     // engagement bait
     "hot take", "unpopular opinion", "am i the only one", "who else",
     "change my mind", "prove me wrong", "like and retweet", "retweet to",

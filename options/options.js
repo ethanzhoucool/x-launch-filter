@@ -13,8 +13,11 @@ const BOOLS = [
   "filterProfiles",
   "showHud",
   "debug",
+  "searchFeed",
+  "searchLatest",
+  "searchVideoOnly",
 ];
-const TEXTS = ["extraInclude", "extraExclude"];
+const TEXTS = ["extraInclude", "extraExclude", "searchQuery"];
 
 const savedEl = document.getElementById("saved");
 let saveTimer = 0;
