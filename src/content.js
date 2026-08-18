@@ -167,7 +167,32 @@ function rejudge(r, c) {
 
 const LEDGER_CAP = 300;
 
+// Reloading the extension orphans content scripts already running in open tabs.
+// Every chrome.* call from an orphan throws "Extension context invalidated",
+// and this file runs three timers, so an orphan spams the error list every
+// 400ms until the tab is refreshed — which buries whatever real error you were
+// trying to read. On the first sign of it, stop and clean up instead.
+const alive = () => {
+  try { return !!chrome.runtime?.id; } catch { return false; }
+};
+
+const timers = [];
+let torn = false;
+
+function teardown() {
+  if (torn) return;
+  torn = true;
+  timers.forEach(clearInterval);
+  closePanel();
+  hudEl?.remove();
+  hudEl = null;
+  gateEl?.remove();
+  gateEl = null;
+  HTML.classList.remove("xlf-gated");
+}
+
 function loadLedger() {
+  if (!alive()) return;
   chrome.storage.local.get({ ledger: null }, (r) => {
     const l = r.ledger;
     if (l && Array.isArray(l.home) && Array.isArray(l.search)) ledger = l;
@@ -175,7 +200,7 @@ function loadLedger() {
 }
 
 function saveLedger() {
-  if (!ledgerDirty) return;
+  if (!ledgerDirty || !alive()) return;
   ledgerDirty = false;
   try { chrome.storage.local.set({ ledger }); } catch { /* preview degrades, nothing else */ }
 }
@@ -595,6 +620,7 @@ function renderGate() {
 }
 
 function apply() {
+  if (!alive()) return teardown();
   detectTheme();
   if (maybeRedirectHome()) return;
   if (gatedHere()) { renderGate(); setHud(); return; }
@@ -605,7 +631,7 @@ function apply() {
 /* ---------- wiring ---------- */
 
 loadLedger();
-setInterval(saveLedger, 4000);
+timers.push(setInterval(saveLedger, 4000));
 
 chrome.storage.local.get(null, (all) => {
   stored = all || {};
@@ -628,7 +654,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 let lastHref = location.href;
-setInterval(() => {
+timers.push(setInterval(() => {
+  if (!alive()) return teardown();
   detectTheme();
   if (location.href !== lastHref) {
     lastHref = location.href;
@@ -636,10 +663,10 @@ setInterval(() => {
     closePanel();
     apply();
   }
-}, 400);
+}, 400));
 
 // A pause can expire while the tab sits open.
-setInterval(apply, 2000);
+timers.push(setInterval(apply, 2000));
 window.addEventListener("beforeunload", saveLedger);
 
 if (document.readyState === "loading") {
