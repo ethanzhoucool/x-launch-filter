@@ -20,6 +20,7 @@ const LOCAL = {
   minViews: 50000,
   minLikeRate: 0,
   minBookmarkRate: 0,
+  requireLaunch: true,
   blockExplore: true,
   showHud: true,
   filterSearch: false,
@@ -96,6 +97,19 @@ function setHud() {
     hudEl.id = "xlf-hud";
     hudEl.appendChild(document.createElement("span")).className = "xlf-dot";
     hudEl.appendChild(document.createElement("span")).className = "xlf-hud-text";
+    hudEl.setAttribute("role", "button");
+    hudEl.setAttribute("aria-label", "Filter settings");
+    hudEl.tabIndex = 0;
+    hudEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePanel();
+    });
+    hudEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        togglePanel();
+      }
+    });
     document.body.appendChild(hudEl);
   }
   const bits = [`${tally.kept} shown`, `${tally.dropped} filtered`];
@@ -117,6 +131,122 @@ document.addEventListener("xlf:stats", (e) => {
     /* cosmetic */
   }
 });
+
+/* ---------- settings panel ---------- */
+
+// The counter is the only piece of this extension you look at while actually
+// using X, so it is also where the dials live. Saving writes to storage and
+// reloads: the feed you are looking at was already filtered on the way in, so
+// new thresholds cannot apply to it without refetching.
+
+const VIEW_STEPS = [
+  [0, "no floor"], [5000, "5k"], [10000, "10k"], [25000, "25k"], [50000, "50k"],
+  [100000, "100k"], [250000, "250k"], [500000, "500k"], [1000000, "1M"],
+];
+const LIKE_STEPS = [
+  [0, "off"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"], [2, "2%"], [3, "3%"], [5, "5%"],
+];
+const BOOKMARK_STEPS = [
+  [0, "off"], [0.05, "0.05%"], [0.1, "0.1%"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"],
+];
+
+let panelEl = null;
+
+function buildSelect(steps, current) {
+  const s = document.createElement("select");
+  for (const [value, label] of steps) {
+    const o = document.createElement("option");
+    o.value = String(value);
+    o.textContent = label;
+    if (Number(current) === value) o.selected = true;
+    s.appendChild(o);
+  }
+  return s;
+}
+
+function panelRow(text, control) {
+  const r = el("div", "xlf-row");
+  r.append(el("label", null, text), control);
+  return r;
+}
+
+function buildPanel() {
+  const p = el("div");
+  p.id = "xlf-panel";
+  p.addEventListener("click", (e) => e.stopPropagation());
+
+  const views = buildSelect(VIEW_STEPS, cfg.minViews);
+  const likes = buildSelect(LIKE_STEPS, cfg.minLikeRate);
+  const marks = buildSelect(BOOKMARK_STEPS, cfg.minBookmarkRate);
+
+  const launch = document.createElement("input");
+  launch.type = "checkbox";
+  launch.checked = cfg.requireLaunch !== false;
+  const launchRow = el("label", "xlf-check");
+  launchRow.append(launch, el("span", null, "Require launch signals"));
+
+  const save = el("button", "xlf-save", "Save and reload");
+  save.type = "button";
+  const cancel = el("button", "xlf-ghost", "Cancel");
+  cancel.type = "button";
+  const more = el("button", "xlf-link", "All settings");
+  more.type = "button";
+
+  save.addEventListener("click", () => {
+    save.disabled = true;
+    save.textContent = "Saving\u2026";
+    chrome.storage.local.set(
+      {
+        minViews: Number(views.value),
+        minLikeRate: Number(likes.value),
+        minBookmarkRate: Number(marks.value),
+        requireLaunch: launch.checked,
+      },
+      () => location.reload()
+    );
+  });
+  cancel.addEventListener("click", closePanel);
+  more.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "openOptions" });
+    closePanel();
+  });
+
+  const actions = el("div", "xlf-actions");
+  actions.append(save, cancel);
+
+  p.append(
+    el("div", "xlf-title", "Filter"),
+    panelRow("Minimum views", views),
+    panelRow("Like rate", likes),
+    panelRow("Bookmark rate", marks),
+    launchRow,
+    actions,
+    more
+  );
+  return p;
+}
+
+function onPanelKey(e) {
+  if (e.key === "Escape") closePanel();
+}
+
+function openPanel() {
+  if (!document.body) return;
+  closePanel();
+  panelEl = buildPanel();
+  document.body.appendChild(panelEl);
+  document.addEventListener("click", closePanel);
+  document.addEventListener("keydown", onPanelKey);
+}
+
+function closePanel() {
+  panelEl?.remove();
+  panelEl = null;
+  document.removeEventListener("click", closePanel);
+  document.removeEventListener("keydown", onPanelKey);
+}
+
+const togglePanel = () => (panelEl ? closePanel() : openPanel());
 
 /* ---------- explore gate ---------- */
 

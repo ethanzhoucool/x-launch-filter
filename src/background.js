@@ -46,6 +46,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     unlock(msg.minutes).then(() => respond({ ok: true }));
     return true;
   }
+  if (msg?.type === "openOptions") {
+    chrome.runtime.openOptionsPage();
+    respond({ ok: true });
+    return true;
+  }
   if (msg?.type === "relock") {
     relock().then(() => respond({ ok: true }));
     return true;

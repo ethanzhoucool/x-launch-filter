@@ -16,6 +16,10 @@ and no layout is overridden.
 4. Open `x.com/home`. A counter in the bottom-left corner reports how many posts
    were kept and how many were dropped.
 
+Click that counter to change the view floor and the engagement rates without
+leaving the page. Saving reloads the tab, because the posts already on screen
+were filtered on the way in and cannot be re-judged without refetching them.
+
 ## How a post is judged
 
 Dropped before anything is scored: promoted posts, replies, and anything
