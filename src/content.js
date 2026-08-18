@@ -346,11 +346,16 @@ function candidate() {
   };
 }
 
+// The tuned keys, so "did anything change" is a real comparison rather than a
+// guess from counts.
+const TUNED = ["searchFeed", "minViews", "maxFollowers", "requireLaunch",
+  "searchLatest", "searchVideoOnly", "minLikeRate", "minBookmarkRate", "minPerPage"];
+const sameBar = (a, b) => TUNED.every((k) => String(a[k]) === String(b[k]));
+
 function refreshForecast() {
   if (!controls) return;
   const c = candidate();
   const f = forecast(c);
-  const live = modeOf(c) === modeOf(cfg);
 
   controls.searchRows.forEach((r) => (r.hidden = !c.searchFeed));
   controls.keepAliveRow.hidden = !!c.searchFeed;
@@ -363,10 +368,13 @@ function refreshForecast() {
   if (!f.total) {
     controls.summary.textContent =
       `No data from the ${modeOf(c)} feed yet — apply once and it starts measuring.`;
-  } else if (live && f.kept === tally.kept) {
-    controls.summary.textContent = `Keeping ${f.kept} of ${f.total} seen this session`;
+  } else if (sameBar(c, cfg)) {
+    controls.summary.textContent = `Keeping ${f.kept} of ${f.total} seen`;
   } else {
-    controls.summary.textContent = `Would keep ${f.kept} of ${f.total} seen · now ${tally.kept}`;
+    // Both numbers must come from the same pool, or the comparison is noise:
+    // the session tally counts this page load, the ledger spans the session.
+    const now = forecast(cfg).kept;
+    controls.summary.textContent = `Would keep ${f.kept} of ${f.total} seen · now ${now}`;
   }
 
   controls.bars.replaceChildren();
