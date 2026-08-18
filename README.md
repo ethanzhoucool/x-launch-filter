@@ -162,40 +162,25 @@ filter kept 5 posts out of 35 judged, and with the launch-keyword requirement on
 top it has kept as few as 1 out of 21. An empty column is a real outcome, not a
 bug. Lower the view floor in settings.
 
-**A filtered page can stop X paginating, so a few rejects are let through.**
-X's "load more" is driven by rendered content, so a page filtered down to
-nothing is a dead end. Measured: with an empty timeline, scrolling to the bottom
-eight times produced zero further timeline requests — the feed simply ends.
+**The feed is fed by reading ahead.** X's "load more" is driven by rendered
+content, so a page filtered down to nothing is a dead end. Measured: with an
+empty timeline, scrolling to the bottom eight times produced zero further
+timeline requests, and the feed simply ended.
 
-The current guard is a floor. When a page would leave fewer than `minPerPage`
-posts (default 3), the highest-view rejects go back in so there is something to
-scroll and X keeps asking for more. That means a starved page shows a few posts
-below your bar. Set it to 0 to turn the net off and accept the dead end.
+So while X renders one page, the interceptor quietly pulls the next few over the
+same cursor, keeps the posts that qualify, and banks them for X's next request.
+X's own cursor is rewritten to match how far the read-ahead got, so it never
+refetches ground already covered, and delivered posts are tracked so nothing
+appears twice. Replaying X's own signed headers on a cursor URL is what makes
+this possible: verified live, it returns 200 with a further cursor.
 
-The better fix is a top-up: follow the bottom cursor, fetch and filter more
-pages, and merge before handing anything back. That was built and reverted. It
-needs the extension to complete X's request itself rather than filter on read,
-and X's client rejected the synthesized completion with "Something went wrong."
-The header replay it depends on does work — replaying X's own signed headers on
-a cursor URL returns 200 with a further cursor — so the idea is sound and the
-delivery is what needs solving.
-
-**The config bridge fails open, on purpose.** Settings reach the page world
-through a `data-xlf` attribute written by the isolated content script, whose
-storage read is asynchronous. Until it lands, the interceptor filters nothing.
-
-That fallback is deliberate and was chosen the hard way. The off switch travels
-through this same attribute, so if the content script dies the interceptor also
-loses the only way to be turned off — filtering regardless would leave a
-modified feed with no escape short of uninstalling. Failing open costs at most
-an unfiltered first page. In practice X's bundle boots hundreds of milliseconds
-after the bridge lands, so it does not come up.
-
-Related: `src/content.js` deliberately does not depend on `src/scoring.js`.
-Chrome injects a script file once even when two `content_scripts` entries list
-it, so `scoring.js` goes to the MAIN world for the interceptor and never arrives
-in the isolated world. Reading `self.XLF` there threw on load and took the
-bridge down with it.
+**Below-bar filler, when even that is not enough.** If a page still comes up
+empty, `minPerPage` (default 2) puts the highest-view rejects back rather than
+let the feed die. These are genuinely below your bar, so the counter names them:
+"2 below bar". Set the dial to none if you would rather have the dead end than
+the dilution. At a strict setting — a 50k floor plus a 1% like rate plus launch
+signals — expect this to fire, because on a measured page only about one post in
+eight clears 50k views before the other gates apply.
 
 **Counts are per-surface.** The corner counter resets on route changes.
 

@@ -19,9 +19,11 @@ self.XLF = (() => {
     // these default off — stacking them with a high view floor empties the feed.
     minLikeRate: 0,
     minBookmarkRate: 0,
-    // A page filtered to nothing stops X paginating, so keep at least this many
-    // posts even when they miss the bar. 0 disables the safety net.
-    minPerPage: 3,
+    // Last-resort filler. A page filtered to nothing stops X paginating, so
+    // this many below-bar posts go back in rather than let the feed die. The
+    // read-ahead bank in intercept.js exists to make it unnecessary; 0 turns it
+    // off and accepts the occasional dead end.
+    minPerPage: 2,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,

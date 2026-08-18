@@ -21,6 +21,7 @@ const LOCAL = {
   minLikeRate: 0,
   minBookmarkRate: 0,
   requireLaunch: true,
+  minPerPage: 2,
   blockExplore: true,
   showHud: true,
   filterSearch: false,
@@ -31,7 +32,7 @@ let stored = {};
 let cfg = { ...LOCAL };
 let gateEl = null;
 let hudEl = null;
-let tally = { kept: 0, dropped: 0 };
+let tally = { kept: 0, dropped: 0, rescued: 0 };
 
 const filterOn = () => cfg.enabled && Date.now() >= cfg.unlockUntil;
 
@@ -116,6 +117,9 @@ function setHud() {
   bits.push(`${Math.round(cfg.minViews / 1000)}k+`);
   if (cfg.minLikeRate > 0) bits.push(`${cfg.minLikeRate}% likes`);
   if (cfg.minBookmarkRate > 0) bits.push(`${cfg.minBookmarkRate}% saves`);
+  // Filler is the one thing here that shows you posts below your own bar, so
+  // it says so rather than looking like the filter missed them.
+  if (tally.rescued) bits.push(`${tally.rescued} below bar`);
   hudEl.querySelector(".xlf-hud-text").textContent = bits.join(" · ");
 }
 
@@ -124,8 +128,9 @@ function setHud() {
 document.addEventListener("xlf:stats", (e) => {
   try {
     const s = JSON.parse(e.detail);
-    tally.kept += s.kept || 0;
+    tally.kept += (s.kept || 0) + (s.banked || 0);
     tally.dropped += s.dropped || 0;
+    tally.rescued += s.rescued || 0;
     setHud();
   } catch {
     /* cosmetic */
@@ -145,6 +150,9 @@ const VIEW_STEPS = [
 ];
 const LIKE_STEPS = [
   [0, "off"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"], [2, "2%"], [3, "3%"], [5, "5%"],
+];
+const FILLER_STEPS = [
+  [0, "none"], [1, "1"], [2, "2"], [3, "3"],
 ];
 const BOOKMARK_STEPS = [
   [0, "off"], [0.05, "0.05%"], [0.1, "0.1%"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"],
@@ -179,6 +187,8 @@ function buildPanel() {
   const likes = buildSelect(LIKE_STEPS, cfg.minLikeRate);
   const marks = buildSelect(BOOKMARK_STEPS, cfg.minBookmarkRate);
 
+  const filler = buildSelect(FILLER_STEPS, cfg.minPerPage);
+
   const launch = document.createElement("input");
   launch.type = "checkbox";
   launch.checked = cfg.requireLaunch !== false;
@@ -201,6 +211,7 @@ function buildPanel() {
         minLikeRate: Number(likes.value),
         minBookmarkRate: Number(marks.value),
         requireLaunch: launch.checked,
+        minPerPage: Number(filler.value),
       },
       () => location.reload()
     );
@@ -219,6 +230,7 @@ function buildPanel() {
     panelRow("Minimum views", views),
     panelRow("Like rate", likes),
     panelRow("Bookmark rate", marks),
+    panelRow("Below-bar filler", filler),
     launchRow,
     actions,
     more
@@ -326,7 +338,7 @@ setInterval(() => {
   if (location.href !== lastHref) {
     lastHref = location.href;
     // Counts are per-surface; carrying them across a route change is noise.
-    tally = { kept: 0, dropped: 0 };
+    tally = { kept: 0, dropped: 0, rescued: 0 };
     apply();
   }
 }, 400);
