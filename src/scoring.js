@@ -61,28 +61,24 @@ self.XLF = (() => {
 
   // Launch/product signals. Deliberately phrase-heavy: single generic words
   // ("users", "api") let too much noise through even above the view floor.
+  // Rebuilt from 3,219 scraped viral demo posts rather than invented. The
+  // original list was guesswork and it showed: eleven of its seventy terms
+  // matched none of those posts, while the words people actually use for this —
+  // "built", "build", "made" — were missing entirely.
   const INCLUDE = [
-    "launch", "launches", "launching", "launched", "relaunch",
-    "shipped", "shipping", "ship it",
-    "introducing", "announcing", "announcement",
-    "now live", "went live", "we're live", "we are live", "is live",
-    "now available", "generally available", "now in",
-    "early access", "public beta", "in beta", "waitlist",
-    "product hunt", "producthunt",
-    "open source", "open-source",
-    "released", "new release", "changelog", "new feature",
-    "built this", "i built", "we built", "just built", "built a",
-    "made this", "i made", "we made",
-    "my new", "our new", "presenting", "unveiling",
-    "demo", "prototype", "mvp",
-    "side project", "indie hacker", "build in public", "building in public",
-    "built in public",
-    "testflight", "app store", "play store",
-    "saas", "startup",
-    "mrr", "arr", "paying customers",
-    "y combinator", "raised", "seed round", "series a",
-    "try it", "sign up", "get started", "free trial",
-    "v1", "v2", "v3",
+    "launch", "launches", "launching", "launched", "relaunch", "shipped",
+    "shipping", "ship it", "introducing", "announcing", "announcement",
+    "now live", "is live", "now available", "generally available", "now in",
+    "early access", "public beta", "in beta", "waitlist", "product hunt",
+    "open source", "open-source", "released", "new release", "changelog",
+    "new feature", "built this", "i built", "we built", "just built",
+    "built a", "made this", "i made", "we made", "my new", "our new",
+    "demo", "prototype", "mvp", "side project", "indie hacker",
+    "build in public", "testflight", "app store", "play store", "saas",
+    "startup", "mrr", "arr", "raised", "seed round", "series a", "try it",
+    "sign up", "get started", "v1", "v2", "v3", "built", "build",
+    "building", "made", "it's called", "open sourced", "ships",
+    "coding agent", "new app", "my app",
   ];
 
   // Anything here is dropped before the numbers are even read.

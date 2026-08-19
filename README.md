@@ -130,7 +130,26 @@ views divided by 170. Checked against live results, `min_faves:150` lands around
 a 25k-view median. The exact view floor and follower ceiling are still enforced
 on the results, so the conversion only has to be approximately right.
 
-The query ANDs two groups: launch phrasing, and product vocabulary. The second
+Both keyword groups were rebuilt from **3,219 scraped viral demo posts** rather
+than written from imagination, using the corpus in `~/projects/tooling/x-demo-scraper`.
+The hand-written originals did not survive contact with the data:
+
+| | coverage of 3,219 viral demo posts |
+| --- | --- |
+| original launch phrases (any match) | 8.0% |
+| original query (phrases AND product) | 2.7% |
+| **rebuilt query** | **21.3%** |
+
+`"launching today"` matched **one** post out of 3,219. `"just shipped"` added
+nothing at all. Meanwhile the words these posts actually use — `built` (397
+hits), `build` (297), `made` (118), `"it's called"` (33) — were missing
+entirely. The same was true of the client-side launch list: eleven of its
+seventy terms matched nothing, and rebuilding took its coverage from 30% to 43%.
+
+The corpus skews toward AI and dev-tool demos, which is the intended target, so
+terms like `agent` and `model` are deliberate.
+
+The query ANDs two groups: action words, and product vocabulary. The second
 group is what makes it work. "launch" has senses no search operator separates,
 and the first live test returned a ballistic-missile report as its top hit;
 requiring a product word alongside it fixes that, because news copy almost never
@@ -144,6 +163,7 @@ Tuned against live results, in order:
 | phrases only, Latest | 3 of 5 were Iran/Syria news |
 | phrases AND product terms, Top | 1 of 5 news, 3 of 5 kept at a 10k floor |
 | the shipped query, Top | **4 of 5 kept, no news at all** |
+| corpus-rebuilt query, Top | **5 of 5 kept**, at 341k–7.9M views |
 
 That last run returned 452k, 98k, 75k, 29k and 5.1k view posts, led by
 "Introducing OpenSEO, the open source alternative" — against a home feed where
