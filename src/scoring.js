@@ -35,6 +35,9 @@ self.XLF = (() => {
     // Posts to request per page. X defaults to 20; asking for more is the
     // cheapest defence against a strict bar starving the feed. 0 leaves it be.
     pageSize: 60,
+    // Hide a post once it has been handed over this many times. 0 keeps
+    // showing repeats.
+    hideSeenAfter: 2,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,

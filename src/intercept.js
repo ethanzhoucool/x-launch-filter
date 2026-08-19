@@ -151,6 +151,22 @@
     return { keep: true, judged: 0 };
   }
 
+  /* ---------- posts already seen ---------- */
+
+  // The isolated world counts how often each post has been handed over and
+  // publishes the ids that have had their turn. Parsed once per change rather
+  // than per response: this list runs to a thousand ids.
+  let seenRaw = null;
+  let seenSet = new Set();
+  function seenIds() {
+    const raw = document.documentElement.getAttribute("data-xlf-seen") || "";
+    if (raw !== seenRaw) {
+      seenRaw = raw;
+      seenSet = new Set(raw ? raw.split(",") : []);
+    }
+    return seenSet;
+  }
+
   /* ---------- breaking the deadlock ---------- */
 
   // X's loader fires on a *transition* into the trigger zone, not on being in
@@ -241,12 +257,24 @@
     const before = entries.length;
     let judged = 0;
     let dropped = 0;
+    let reseen = 0;
     const cut = [];
     // Every judgement is kept, not just the counts. The panel re-scores these
     // against candidate settings so tuning does not need a reload to be legible.
     const records = [];
 
+    const seen = cfg.hideSeenAfter > 0 ? seenIds() : null;
+
     for (let i = entries.length - 1; i >= 0; i--) {
+      // A post you have already been shown its share of times is not worth the
+      // slot, whatever else it scores.
+      if (seen && seen.size && !isCursor(entries[i]) && seen.has(entries[i].entryId)) {
+        judged++;
+        dropped++;
+        reseen++;
+        entries.splice(i, 1);
+        continue;
+      }
       const v = entryVerdict(entries[i], cfg);
       judged += v.judged;
       if (v.record) records.push(v.record);
@@ -314,7 +342,7 @@
       opName,
       `${before} entries -> ${entries.length}`,
       `| judged ${judged}, kept ${survivors}, dropped ${dropped - rescued},`,
-      `topped up ${toppedUp}, filler ${rescued}`
+      `topped up ${toppedUp}, filler ${rescued}, already seen ${reseen}`
     );
 
     try {
@@ -327,7 +355,10 @@
             kept: survivors,
             dropped: dropped - rescued,
             rescued,
+            toppedUp,
+            reseen,
             records,
+            delivered: entries.filter((e) => !isCursor(e)).map((e) => e.entryId),
           }),
         })
       );

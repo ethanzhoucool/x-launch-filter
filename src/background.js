@@ -11,6 +11,7 @@ const DEFAULTS = {
   minPerPage: 2,
   topUp: false,
   pageSize: 60,
+  hideSeenAfter: 2,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,

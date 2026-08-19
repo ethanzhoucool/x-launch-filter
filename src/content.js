@@ -21,7 +21,7 @@ const LOCAL = {
 let stored = {};
 let cfg = { ...LOCAL };
 let gateEl = null, hudEl = null, panelEl = null, controls = null;
-let tally = { kept: 0, judged: 0, rescued: 0 };
+let tally = { kept: 0, judged: 0, rescued: 0, reseen: 0 };
 // Per mode: home and search pools behave completely differently (roughly 1 in 8
 // versus 4 in 5 pass), so previewing one against the other's data would lie.
 let ledger = { home: [], search: [] };
@@ -58,6 +58,7 @@ function publishConfig() {
   const payload = { ...stored };
   delete payload.history;
   delete payload.ledger;
+  delete payload.seen;
   try { HTML.setAttribute("data-xlf", JSON.stringify(payload)); } catch { /* nothing to do */ }
 }
 
@@ -167,6 +168,58 @@ function rejudge(r, c) {
 }
 
 const LEDGER_CAP = 300;
+const SEEN_CAP = 3000;      // ids remembered
+const SEEN_PUBLISH_CAP = 1000;  // ids bridged to the page world
+
+// How many times a post has been handed to X. Counting deliveries is a proxy
+// for "seen" — X may not have rendered every one — but it is the only signal
+// available on this side, and it errs toward showing a post again rather than
+// hiding one you never laid eyes on.
+let seenCounts = {};
+let seenDirty = false;
+
+function noteDelivered(ids) {
+  if (!ids || !ids.length || !cfg.hideSeenAfter) return;
+  for (const id of ids) seenCounts[id] = (seenCounts[id] || 0) + 1;
+  const keys = Object.keys(seenCounts);
+  if (keys.length > SEEN_CAP) {
+    for (const k of keys.slice(0, keys.length - SEEN_CAP)) delete seenCounts[k];
+  }
+  seenDirty = true;
+  publishSeen();
+}
+
+// Only the ids that have had their turn cross the boundary; the counts stay
+// here. Keeps the attribute to the ids that actually change a decision.
+function publishSeen() {
+  if (!cfg.hideSeenAfter) {
+    HTML.removeAttribute("data-xlf-seen");
+    return;
+  }
+  const done = [];
+  for (const id in seenCounts) {
+    if (seenCounts[id] >= cfg.hideSeenAfter) done.push(id);
+  }
+  try {
+    HTML.setAttribute("data-xlf-seen", done.slice(-SEEN_PUBLISH_CAP).join(","));
+  } catch {
+    /* the feature degrades, nothing else */
+  }
+}
+
+function loadSeen() {
+  if (!alive()) return;
+  chrome.storage.local.get({ seen: null }, (r) => {
+    if (r.seen && typeof r.seen === "object") seenCounts = r.seen;
+    publishSeen();
+  });
+}
+
+function saveSeen() {
+  if (!seenDirty || !alive()) return;
+  seenDirty = false;
+  try { chrome.storage.local.set({ seen: seenCounts }); } catch { /* ignore */ }
+}
 
 // Reloading the extension orphans content scripts already running in open tabs.
 // Every chrome.* call from an orphan throws "Extension context invalidated",
@@ -303,7 +356,9 @@ document.addEventListener("xlf:stats", (e) => {
     tally.kept += s.kept || 0;
     tally.judged += s.judged || 0;
     tally.rescued += s.rescued || 0;
+    tally.reseen += s.reseen || 0;
     addRecords(s.records);
+    noteDelivered(s.delivered);
     setHud();
     if (panelEl) refreshForecast();
   } catch { /* cosmetic */ }
@@ -632,11 +687,14 @@ function apply() {
 /* ---------- wiring ---------- */
 
 loadLedger();
+loadSeen();
 timers.push(setInterval(saveLedger, 4000));
+timers.push(setInterval(saveSeen, 5000));
 
 chrome.storage.local.get(null, (all) => {
   stored = all || {};
   delete stored.ledger;
+  delete stored.seen;
   cfg = { ...LOCAL, ...stored };
   publishConfig();
   apply();
@@ -644,9 +702,10 @@ chrome.storage.local.get(null, (all) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if ("ledger" in changes && Object.keys(changes).length === 1) return;
+  const noise = ["ledger", "seen"];
+  if (Object.keys(changes).every((k) => noise.includes(k))) return;
   for (const [k, { newValue }] of Object.entries(changes)) {
-    if (k === "ledger") continue;
+    if (noise.includes(k)) continue;
     stored[k] = newValue;
     cfg[k] = newValue;
   }
@@ -660,7 +719,7 @@ timers.push(setInterval(() => {
   detectTheme();
   if (location.href !== lastHref) {
     lastHref = location.href;
-    tally = { kept: 0, judged: 0, rescued: 0 };
+    tally = { kept: 0, judged: 0, rescued: 0, reseen: 0 };
     closePanel();
     apply();
   }
@@ -668,7 +727,7 @@ timers.push(setInterval(() => {
 
 // A pause can expire while the tab sits open.
 timers.push(setInterval(apply, 2000));
-window.addEventListener("beforeunload", saveLedger);
+window.addEventListener("beforeunload", () => { saveLedger(); saveSeen(); });
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", apply, { once: true });
