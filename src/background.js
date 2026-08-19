@@ -10,6 +10,7 @@ const DEFAULTS = {
   maxFollowers: 0,
   minPerPage: 2,
   topUp: false,
+  pageSize: 60,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,

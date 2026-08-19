@@ -12,7 +12,7 @@ const HTML = document.documentElement;
 const LOCAL = {
   enabled: true, unlockUntil: 0, minViews: 50000, minLikeRate: 0,
   minBookmarkRate: 0, maxFollowers: 0, requireLaunch: true, hideAds: true,
-  hideReplies: true, hideReposts: false, minPerPage: 2, topUp: false,
+  hideReplies: true, hideReposts: false, minPerPage: 2, topUp: false, pageSize: 60,
   searchFeed: false,
   searchLatest: false, searchVideoOnly: false, searchQuery: "",
   blockExplore: true, showHud: true, filterSearch: false, filterProfiles: false,

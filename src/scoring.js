@@ -32,6 +32,9 @@ self.XLF = (() => {
     // is the only state X cannot recover from on its own. Blocks the main
     // thread for the length of one request, so it is opt-in.
     topUp: false,
+    // Posts to request per page. X defaults to 20; asking for more is the
+    // cheapest defence against a strict bar starving the feed. 0 leaves it be.
+    pageSize: 60,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,

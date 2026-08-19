@@ -61,6 +61,26 @@
             >Show the counter in the corner</span
           >
         </label>
+        <label class="field">
+          <span>Posts per request <em>X sends 20; asking for more means a strict
+            bar still leaves enough on the page to scroll</em></span>
+          <select id="pageSize">
+            <option value="0">leave X alone (20)</option>
+            <option value="40">40</option>
+            <option value="60">60</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="topUp" />
+          <span>
+            Rescue a thin feed too
+            <em>A page that keeps nothing already rescues itself, because it
+            cannot be scrolled and X would never be asked again. This extends
+            that to pages that keep only one post, which you could still scroll
+            your way out of. Costs a brief freeze on those pages.</em>
+          </span>
+        </label>
         <label class="check">
           <input type="checkbox" id="debug" />
           <span>

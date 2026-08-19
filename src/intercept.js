@@ -173,7 +173,14 @@
   // rendering. The response getter is synchronous, so this fetch has to be too.
   // That blocks the main thread, which is why it runs ONLY on a starved page —
   // the case that would otherwise dead-end the feed permanently.
-  const TOPUP_MAX_PAGES = 2;
+  // A page that keeps nothing is not merely thin, it is dead: there is nothing
+  // to render, so the document is no taller than the viewport, so there is no
+  // scroll gesture available and X will never be asked again. Blocking briefly
+  // to go find posts is strictly better than a feed that has stopped. So the
+  // empty case rescues itself unconditionally, and the setting only governs the
+  // thin-but-alive case, where the user can still scroll their way out.
+  const TOPUP_PAGES_EMPTY = 3;
+  const TOPUP_PAGES_THIN = 2;
 
   function syncFetch(url, headers) {
     const x = new XMLHttpRequest();
@@ -197,13 +204,13 @@
   // Pulls further pages until the page is worth rendering. Returns the keepers
   // and the cursor we actually consumed up to, so X carries on from the right
   // place rather than refetching ground we already mined.
-  function topUp(req, cursor, cfg, want) {
+  function topUp(req, cursor, cfg, want, maxPages) {
     const gained = [];
     let at = cursor;
     let judged = 0;
     let dropped = 0;
-    for (let round = 0; round < TOPUP_MAX_PAGES && gained.length < want && at; round++) {
-      const page = findEntries(syncFetch(urlWithCursor(req.url, at), req.headers));
+    for (let round = 0; round < maxPages && gained.length < want && at; round++) {
+      const page = findEntries(syncFetch(inflatePage(urlWithCursor(req.url, at), cfg), req.headers));
       if (!page || !page.length) break;
       for (const entry of page) {
         if (isCursor(entry)) continue;
@@ -258,12 +265,16 @@
     // A starved page is the deadlock case, and the only one worth blocking for.
     let toppedUp = 0;
     const bottom = bottomCursor(entries);
+    const survivorsBefore = judged - dropped;
+    const empty = judged > 0 && survivorsBefore === 0;
+    const thin = survivorsBefore < 2;
     if (
-      cfg.topUp !== false && judged && judged - dropped < 2 &&
+      (empty || (thin && cfg.topUp === true)) && judged &&
       req?.url && req?.headers && bottom?.content?.value
     ) {
       try {
-        const r = topUp(req, bottom.content.value, cfg, 4);
+        const r = topUp(req, bottom.content.value, cfg, 4,
+          empty ? TOPUP_PAGES_EMPTY : TOPUP_PAGES_THIN);
         if (r.gained.length) {
           const at = entries.indexOf(bottom);
           entries.splice(at < 0 ? entries.length : at, 0, ...r.gained);
@@ -345,14 +356,56 @@
 
   const origSetHeader = proto.setRequestHeader;
 
+  // Ask for a bigger page. Starvation is arithmetic: X sends 20 posts, a strict
+  // bar keeps one or two, the sentinel never moves and the feed dead-ends. Ask
+  // for 60 and the same bar keeps three times as many, which is usually enough
+  // to keep the page growing on its own.
+  //
+  // Rewriting the outgoing `variables` is safe and well-precedented — Control
+  // Panel for Twitter does exactly this in production to force reply sorting —
+  // and it leaves method and path untouched, so X's request signature, which
+  // covers those and not the query string, stays valid.
+  // Asking for a bigger page is unverified against X's server: it may cap the
+  // count silently (harmless), ignore it (harmless), or reject the request
+  // (not harmless). So it backs itself out. The first inflated request that
+  // comes back unusable disables inflation for the rest of the session, and
+  // every later request goes out exactly as X wrote it.
+  let inflationOff = false;
+
+  function inflatePage(url, cfg) {
+    if (!cfg.pageSize || inflationOff) return url;
+    const u = new URL(url, location.origin);
+    const raw = u.searchParams.get("variables");
+    if (!raw) return url;
+    const vars = JSON.parse(raw);
+    if (typeof vars.count !== "number" || vars.count >= cfg.pageSize) return url;
+    vars.count = cfg.pageSize;
+    u.searchParams.set("variables", JSON.stringify(vars));
+    return u.toString();
+  }
+
   proto.open = function (method, url, ...rest) {
+    let target = url;
     try {
       this.__xlfUrl = new URL(String(url), location.origin).toString();
       this.__xlfOp = opOf(this.__xlfUrl);
       this.__xlfHeaders = {};
+      if (this.__xlfOp) {
+        const cfg = config();
+        if (cfg.filterOn && appliesTo(this.__xlfOp, cfg)) {
+          const bigger = inflatePage(this.__xlfUrl, cfg);
+          if (bigger !== this.__xlfUrl) {
+            this.__xlfUrl = bigger;
+            this.__xlfInflated = true;
+            target = bigger;
+            log(this.__xlfOp, "asking for", cfg.pageSize, "posts");
+          }
+        }
+      }
     } catch {
       this.__xlfOp = null;
     }
+    if (target !== url) return origOpen.call(this, method, target, ...rest);
     // XHR objects get reused. Stale caches would serve the previous response.
     this.__xlfCached = undefined;
     this.__xlfRaw = undefined;
@@ -370,6 +423,16 @@
 
   function cachedText(xhr, raw) {
     if (xhr.__xlfCached !== undefined && xhr.__xlfRaw === raw) return xhr.__xlfCached;
+    // The back-out: an inflated request that did not come back clean means the
+    // server did not like it, so stop asking. X's own retry then goes out
+    // unmodified rather than failing the same way twice.
+    if (xhr.__xlfInflated && !inflationOff) {
+      const bad = xhr.status !== 200 || !raw || raw.charCodeAt(0) !== 123;
+      if (bad) {
+        inflationOff = true;
+        log("bigger pages rejected (status", xhr.status + "), asking normally from now on");
+      }
+    }
     xhr.__xlfRaw = raw;
     try {
       xhr.__xlfCached = filterText(raw, xhr.__xlfOp, xhr);

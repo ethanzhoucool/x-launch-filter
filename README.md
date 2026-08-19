@@ -279,12 +279,27 @@ synthetic `scroll` events, and translating the sentinel out of the viewport and
 back — every one produced **zero** requests, while a single real wheel gesture
 fired immediately. X wants trusted input and script cannot forge it.
 
-So **Rescue a dead-ended feed** (off by default) does not try. When a page
-filters down to nothing it fetches the next page itself and hands X a response
-worth rendering. The response getter is synchronous, so that fetch has to be
-too, which briefly blocks the page — hence starved pages only, capped at two
-extra pages, and off unless you ask for it. It only ever advances X's cursor to
-a page it actually consumed.
+So this does not try to fake a gesture. Two defences instead, cheapest first.
+
+**Ask for a bigger page.** Starvation is arithmetic: X sends 20 posts, a strict
+bar keeps one, the sentinel never moves. The outgoing request's `variables.count`
+is rewritten to 60, so the same bar keeps roughly three times as many and the
+page usually keeps growing on its own. Rewriting `variables` is well precedented
+— Control Panel for Twitter does exactly this in production to force reply
+sorting — and it leaves method and path alone, so X's request signature stays
+valid. It is unverified against X's server, so it backs itself out: the first
+inflated request that returns anything unusable disables inflation for the rest
+of the session and every later request goes out exactly as X wrote it.
+
+**Rescue a dead-ended feed.** When a page still keeps nothing, the interceptor
+fetches the next page itself and hands X a response worth rendering. That case
+is unconditional, because a page with no posts is not merely thin: the document
+is no taller than the viewport, so there is no scroll gesture available and X
+will never be asked again. Blocking briefly beats a feed that has stopped. The
+response getter is synchronous so the fetch is a synchronous XHR, capped at
+three extra pages, failing open on any error, and it only ever advances X's
+cursor to a page it actually consumed. Extending the same rescue to thin-but-
+scrollable pages is opt-in, since you can scroll your way out of those.
 
 The cheaper fix is yield: at a 25k floor with an under-50k follower ceiling this
 feed kept 22 of 300, and dropping the ceiling alone took it to 74. Above roughly

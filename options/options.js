@@ -2,7 +2,7 @@
 // this extension, and locking that behind the unlock made experimenting worse
 // without making the filter meaningfully harder to defeat.
 
-const NUMS = [];
+const NUMS = ["pageSize"];
 const BOOLS = [
   "hideAds",
   "hideReplies",
@@ -12,6 +12,7 @@ const BOOLS = [
   "filterProfiles",
   "showHud",
   "debug",
+  "topUp",
   "searchLatest",
   "searchVideoOnly",
 ];
