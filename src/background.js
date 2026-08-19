@@ -9,6 +9,7 @@ const DEFAULTS = {
   minBookmarkRate: 0,
   maxFollowers: 0,
   minPerPage: 2,
+  topUp: false,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,

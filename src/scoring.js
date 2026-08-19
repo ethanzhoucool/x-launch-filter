@@ -28,6 +28,10 @@ self.XLF = (() => {
     // read-ahead bank in intercept.js exists to make it unnecessary; 0 turns it
     // off and accepts the occasional dead end.
     minPerPage: 2,
+    // Synchronously pull another page when one filters down to nothing, which
+    // is the only state X cannot recover from on its own. Blocks the main
+    // thread for the length of one request, so it is opt-in.
+    topUp: false,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,

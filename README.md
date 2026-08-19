@@ -264,6 +264,33 @@ why, because the idea is tempting:
 The interceptor now only decides what survives. It does not fetch, rewrite
 cursors, or reorder. X owns pagination.
 
+**The dead-end, and the one thing that fixes it.** X's loader fires on a
+*transition* into the trigger zone, not on being in it. Unfiltered, a fetch adds
+20 posts and shoves the loading sentinel far below the fold, so the next scroll
+re-enters the zone and fires again. Filter a page down to nothing and the
+sentinel never moves: no transition, no next fetch. Scrolling up and back down
+fixes it by hand, because that re-creates the transition. If nothing survives at
+all, the page is not even scrollable and there is no way out.
+
+Triggering that loader from script is not possible. Measured across eight
+approaches — `scrollTo` to the true bottom, `scrollBy`, a full excursion up and
+back, `scrollTo(0)` then bottom, smooth scroll, a synthetic `WheelEvent`,
+synthetic `scroll` events, and translating the sentinel out of the viewport and
+back — every one produced **zero** requests, while a single real wheel gesture
+fired immediately. X wants trusted input and script cannot forge it.
+
+So **Rescue a dead-ended feed** (off by default) does not try. When a page
+filters down to nothing it fetches the next page itself and hands X a response
+worth rendering. The response getter is synchronous, so that fetch has to be
+too, which briefly blocks the page — hence starved pages only, capped at two
+extra pages, and off unless you ask for it. It only ever advances X's cursor to
+a page it actually consumed.
+
+The cheaper fix is yield: at a 25k floor with an under-50k follower ceiling this
+feed kept 22 of 300, and dropping the ceiling alone took it to 74. Above roughly
+a quarter, pages stay full enough that the sentinel keeps moving on its own and
+the dead-end stops happening.
+
 **Below-bar filler.** A page filtered to nothing gives X nothing to render and
 nothing to scroll, so it stops asking for more. `minPerPage` (default 2) puts
 the highest-view rejects back rather than let the feed end. These are genuinely

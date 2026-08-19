@@ -151,9 +151,77 @@
     return { keep: true, judged: 0 };
   }
 
+  /* ---------- breaking the deadlock ---------- */
+
+  // X's loader fires on a *transition* into the trigger zone, not on being in
+  // it. Unfiltered, a fetch adds 20 posts and shoves the sentinel far below the
+  // fold, so the next scroll re-enters the zone and fires again. Filter a page
+  // down to nothing and the sentinel never moves: no transition, no next fetch,
+  // and if nothing survives at all the page is not even scrollable, so the user
+  // cannot break the deadlock either. Measured: docH equal to the viewport
+  // height, zero posts, no way out.
+  //
+  // Triggering X's loader from script is not possible. Measured across eight
+  // approaches — scrollTo to the true bottom, scrollBy, a full excursion up and
+  // back, scrollTo(0) then bottom, smooth scroll, synthetic WheelEvent,
+  // synthetic scroll events, and translating the sentinel out of the viewport
+  // and back — every one produced zero requests, while a single real wheel
+  // gesture fired immediately. X wants trusted input and script cannot forge it.
+  //
+  // So do not trigger the loader. Remove the need for it: when a page is
+  // starved, fetch the next page ourselves and hand X a response worth
+  // rendering. The response getter is synchronous, so this fetch has to be too.
+  // That blocks the main thread, which is why it runs ONLY on a starved page —
+  // the case that would otherwise dead-end the feed permanently.
+  const TOPUP_MAX_PAGES = 2;
+
+  function syncFetch(url, headers) {
+    const x = new XMLHttpRequest();
+    x.open("GET", url, false); // synchronous: the getter cannot await
+    for (const k in headers) {
+      try { x.setRequestHeader(k, headers[k]); } catch { /* forbidden header */ }
+    }
+    x.send(null);
+    if (x.status !== 200) throw new Error("top-up " + x.status);
+    return JSON.parse(x.responseText);
+  }
+
+  function urlWithCursor(url, cursor) {
+    const u = new URL(url, location.origin);
+    const vars = JSON.parse(u.searchParams.get("variables") || "{}");
+    vars.cursor = cursor;
+    u.searchParams.set("variables", JSON.stringify(vars));
+    return u.toString();
+  }
+
+  // Pulls further pages until the page is worth rendering. Returns the keepers
+  // and the cursor we actually consumed up to, so X carries on from the right
+  // place rather than refetching ground we already mined.
+  function topUp(req, cursor, cfg, want) {
+    const gained = [];
+    let at = cursor;
+    let judged = 0;
+    let dropped = 0;
+    for (let round = 0; round < TOPUP_MAX_PAGES && gained.length < want && at; round++) {
+      const page = findEntries(syncFetch(urlWithCursor(req.url, at), req.headers));
+      if (!page || !page.length) break;
+      for (const entry of page) {
+        if (isCursor(entry)) continue;
+        const v = entryVerdict(entry, cfg);
+        judged += v.judged;
+        if (v.keep) gained.push(entry);
+        else if (v.judged) dropped++;
+      }
+      const next = bottomCursor(page)?.content?.value;
+      if (!next || next === at) break;
+      at = next;
+    }
+    return { gained, cursor: at, judged, dropped };
+  }
+
   /* ---------- filtering a payload ---------- */
 
-  function filterPayload(root, opName) {
+  function filterPayload(root, opName, req) {
     const cfg = config();
     if (!cfg.filterOn || !appliesTo(opName, cfg)) return null;
 
@@ -187,6 +255,29 @@
       return null;
     }
 
+    // A starved page is the deadlock case, and the only one worth blocking for.
+    let toppedUp = 0;
+    const bottom = bottomCursor(entries);
+    if (
+      cfg.topUp !== false && judged && judged - dropped < 2 &&
+      req?.url && req?.headers && bottom?.content?.value
+    ) {
+      try {
+        const r = topUp(req, bottom.content.value, cfg, 4);
+        if (r.gained.length) {
+          const at = entries.indexOf(bottom);
+          entries.splice(at < 0 ? entries.length : at, 0, ...r.gained);
+          toppedUp = r.gained.length;
+          judged += r.judged;
+          dropped += r.dropped;
+        }
+        // Only ever advance to a cursor whose page we actually consumed.
+        if (r.cursor && r.cursor !== bottom.content.value) bottom.content.value = r.cursor;
+      } catch (e) {
+        log("top-up failed, returning the page as filtered:", e);
+      }
+    }
+
     // Last resort. A page filtered to nothing gives X nothing to render and
     // nothing to scroll, and it stops asking for more. Rather than let the feed
     // end, put the strongest rejects back. Every post this returns is below the
@@ -195,7 +286,6 @@
     const floor = Math.max(0, cfg.minPerPage ?? 2);
     let survivors = judged - dropped;
     if (survivors < floor && cut.length) {
-      const bottom = bottomCursor(entries);
       // Insert ahead of the Bottom cursor: the indices recorded during removal
       // are stale the moment anything else is spliced.
       const at = bottom ? entries.indexOf(bottom) : entries.length;
@@ -212,7 +302,8 @@
     log(
       opName,
       `${before} entries -> ${entries.length}`,
-      `| judged ${judged}, kept ${survivors}, dropped ${dropped - rescued}, filler ${rescued}`
+      `| judged ${judged}, kept ${survivors}, dropped ${dropped - rescued},`,
+      `topped up ${toppedUp}, filler ${rescued}`
     );
 
     try {
@@ -235,9 +326,9 @@
     return root;
   }
 
-  const filterText = (raw, opName) => {
+  const filterText = (raw, opName, req) => {
     if (!raw || raw.charCodeAt(0) !== 123 /* { */) return raw;
-    const out = filterPayload(JSON.parse(raw), opName);
+    const out = filterPayload(JSON.parse(raw), opName, req);
     return out ? JSON.stringify(out) : raw;
   };
 
@@ -252,9 +343,13 @@
   const textDesc = Object.getOwnPropertyDescriptor(proto, "responseText");
   const respDesc = Object.getOwnPropertyDescriptor(proto, "response");
 
+  const origSetHeader = proto.setRequestHeader;
+
   proto.open = function (method, url, ...rest) {
     try {
-      this.__xlfOp = opOf(String(url));
+      this.__xlfUrl = new URL(String(url), location.origin).toString();
+      this.__xlfOp = opOf(this.__xlfUrl);
+      this.__xlfHeaders = {};
     } catch {
       this.__xlfOp = null;
     }
@@ -265,11 +360,19 @@
     return origOpen.call(this, method, url, ...rest);
   };
 
+  // X signs each request, and the signature covers method and path but not the
+  // query string — verified live, replaying these headers against a cursor URL
+  // returns 200 with a further cursor.
+  proto.setRequestHeader = function (name, value) {
+    try { if (this.__xlfHeaders) this.__xlfHeaders[name] = value; } catch { /* ignore */ }
+    return origSetHeader.call(this, name, value);
+  };
+
   function cachedText(xhr, raw) {
     if (xhr.__xlfCached !== undefined && xhr.__xlfRaw === raw) return xhr.__xlfCached;
     xhr.__xlfRaw = raw;
     try {
-      xhr.__xlfCached = filterText(raw, xhr.__xlfOp);
+      xhr.__xlfCached = filterText(raw, xhr.__xlfOp, xhr);
     } catch (e) {
       log("filter threw, passing raw through:", e);
       xhr.__xlfCached = raw;
