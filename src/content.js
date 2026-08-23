@@ -9,19 +9,27 @@
 
 const HTML = document.documentElement;
 
+// Fallbacks for a key that has never been written to storage. This list has to
+// agree with XLF.DEFAULTS key for key, and test/defaults.test.js fails if it
+// does not — a key present there and missing here reads as undefined, which is
+// falsy, which silently turns its feature off. That is exactly how hiding
+// repeats came to be dead code: the default lived in scoring.js, this file
+// cannot import scoring.js, and nothing ever wrote the key.
 const LOCAL = {
   enabled: true, unlockUntil: 0, minViews: 50000, minLikeRate: 0,
   minBookmarkRate: 0, maxFollowers: 0, requireLaunch: true, hideAds: true,
   hideReplies: true, hideReposts: false, minPerPage: 2, topUp: false, pageSize: 60,
-  searchFeed: false,
+  hideSeenAfter: 2, searchRotate: true, searchRotation: 0, searchFeed: false,
   searchLatest: false, searchVideoOnly: false, searchQuery: "",
   blockExplore: true, showHud: true, filterSearch: false, filterProfiles: false,
+  extraInclude: "", extraExclude: "", debug: false,
 };
 
 let stored = {};
 let cfg = { ...LOCAL };
 let gateEl = null, hudEl = null, panelEl = null, controls = null;
-let tally = { kept: 0, judged: 0, rescued: 0, reseen: 0 };
+let tally = { kept: 0, judged: 0, rescued: 0, reseen: 0, repeated: 0 };
+let redirecting = false;
 // Per mode: home and search pools behave completely differently (roughly 1 in 8
 // versus 4 in 5 pass), so previewing one against the other's data would lie.
 let ledger = { home: [], search: [] };
@@ -59,6 +67,9 @@ function publishConfig() {
   delete payload.history;
   delete payload.ledger;
   delete payload.seen;
+  // What counts as the feed, so the page world can tell it apart from a search
+  // you typed. Window stripped, so it survives midnight and a restored tab.
+  if (cfg.searchFeed) payload.feedQueryBase = feedQueryBase(cfg);
   try { HTML.setAttribute("data-xlf", JSON.stringify(payload)); } catch { /* nothing to do */ }
 }
 
@@ -90,12 +101,54 @@ const PRODUCT_TERMS = [
   "feature", '"open source"', "model", "coding", "iOS", "Android",
 ];
 
-function buildSearchQuery(c) {
+// Hiding repeats and a fixed query work against each other. One query sorted by
+// Top is a nearly static ranking: it returns the same page every visit, the
+// ledger correctly hides all of it, and the feed goes blank. So the query has to
+// move, and the date window is the lever that moves it furthest — Top of the
+// last two days and Top of a fortnight ago are disjoint sets by construction,
+// where rewording the terms mostly reshuffles the same posts.
+//
+// Ordered freshest first, ending with the unwindowed query, which is the one
+// that repeats the most and so is worth the fewest visits.
+const WINDOWS = [
+  { from: 2, to: 0 },
+  { from: 5, to: 2 },
+  { from: 10, to: 5 },
+  { from: 21, to: 10 },
+  null,
+];
+
+const dayStamp = (daysAgo) =>
+  new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+
+// Identifying the feed by its whole query was a bug with a clock in it. The
+// window is rebuilt from Date.now() on every call, so at UTC midnight every
+// generated query changed while the tab kept the one it was opened with: no
+// window matched, the surface stopped counting as the feed, filtering stopped
+// silently and the pill vanished. A restored session tab had the same problem
+// from the moment it opened. What identifies the feed is everything except the
+// window, so that is what gets compared.
+const withoutWindow = (q) =>
+  String(q || "").replace(/\s*\b(?:since|until)(?:_time)?:\S+/gi, "").replace(/\s+/g, " ").trim();
+
+// A hand-written query is the user's, untouched. Rotation only applies to the
+// one this file generates.
+function windowFor(c) {
+  if (!c.searchRotate || (c.searchQuery && c.searchQuery.trim())) return null;
+  return WINDOWS[((c.searchRotation || 0) % WINDOWS.length + WINDOWS.length) % WINDOWS.length];
+}
+
+function buildSearchQuery(c, win) {
   if (c.searchQuery && c.searchQuery.trim()) return c.searchQuery.trim();
   const parts = [`(${SEARCH_TERMS.join(" OR ")})`, `(${PRODUCT_TERMS.join(" OR ")})`];
   const faves = Math.min(MIN_FAVES_CAP, Math.round((c.minViews || 0) * LIKES_PER_VIEW));
   if (faves >= MIN_FAVES_FLOOR) parts.push(`min_faves:${faves}`);
   if (c.searchVideoOnly) parts.push("filter:native_video");
+  const w = win === undefined ? windowFor(c) : win;
+  if (w) {
+    parts.push(`since:${dayStamp(w.from)}`);
+    if (w.to > 0) parts.push(`until:${dayStamp(w.to)}`);
+  }
   parts.push("-filter:replies", "lang:en");
   return parts.join(" ");
 }
@@ -107,21 +160,49 @@ const searchFeedUrl = (c) =>
 // Only ever fires on the home path, so it cannot loop: the destination is
 // /search, which is not a redirect source.
 function maybeRedirectHome() {
-  if (!filterOn() || !cfg.searchFeed) return false;
+  if (!filterOn() || !cfg.searchFeed || redirecting) return false;
   const p = location.pathname;
   if (p !== "/" && p !== "/home") return false;
-  location.replace(searchFeedUrl(cfg));
+  const url = searchFeedUrl(cfg);
+  redirecting = true;
+  if (!cfg.searchRotate || !alive()) {
+    location.replace(url);
+    return true;
+  }
+  // Advance before leaving. Storage is the only thing that survives the
+  // navigation, and writing after location.replace() is a race with it. But the
+  // navigation cannot be left hostage to that callback: if the extension is
+  // reloaded in the gap, it never fires, and the latch above then strands the
+  // tab on a home timeline it will not filter and will not leave.
+  const next = ((cfg.searchRotation || 0) + 1) % WINDOWS.length;
+  cfg.searchRotation = next;
+  let gone = false;
+  const go = () => { if (!gone) { gone = true; location.replace(url); } };
+  try {
+    chrome.storage.local.set({ searchRotation: next }, go);
+  } catch {
+    go();
+  }
+  setTimeout(go, 400);
   return true;
 }
 
-// True only for the generated feed query. A manual search is the user's own
-// business and keeps its own setting, otherwise the pill would appear on
-// unrelated searches and claim to be the feed.
+// The query that identifies the feed, window stripped. Published to the page
+// world, which cannot build it: the query is assembled here.
+const feedQueryBase = (c) => withoutWindow(buildSearchQuery(c, null));
+
+// True for any window of the generated feed query, whatever day it was built
+// on. A manual search is the user's own business and keeps its own setting,
+// otherwise the pill would appear on unrelated searches and claim to be the
+// feed.
 function isFeedSearch() {
   if (!cfg.searchFeed) return false;
   try {
-    return (new URLSearchParams(location.search).get("q") || "").trim() === buildSearchQuery(cfg);
-  } catch { return false; }
+    const q = (new URLSearchParams(location.search).get("q") || "").trim();
+    return !!q && withoutWindow(q) === feedQueryBase(cfg);
+  } catch {
+    return false;
+  }
 }
 
 /* ---------- surfaces ---------- */
@@ -173,57 +254,295 @@ function rejudge(r, c) {
 }
 
 const LEDGER_CAP = 300;
-const SEEN_CAP = 3000;      // ids remembered
-const SEEN_PUBLISH_CAP = 1000;  // ids bridged to the page world
 
-// How many times a post has been handed to X. Counting deliveries is a proxy
-// for "seen" — X may not have rendered every one — but it is the only signal
-// available on this side, and it errs toward showing a post again rather than
-// hiding one you never laid eyes on.
-let seenCounts = {};
+/* ---------- the repeat ledger ---------- */
+
+// Two things were wrong with the first version of this, and the second is why
+// repeats survived the one gesture where you notice them.
+//
+// It counted deliveries. A post X handed over was marked seen whether or not it
+// ever reached the viewport, and a post you scrolled past ten times counted
+// once. Seen now means what the word means: the article was on screen, half of
+// it or more, long enough to read. The observer is further down this file.
+//
+// And it published the suppression list on a DOM attribute written after an
+// async chrome.storage read. The interceptor reads that list synchronously,
+// inside an XHR getter, and the first timeline response of a page load lands
+// before any async read can finish — so on a reload the list was still empty
+// and the first page came through unfiltered. That first page is the whole
+// complaint. The ledger now lives in localStorage, which the page world and
+// this one share and both read synchronously, so it is already in place when
+// the first response arrives. chrome.storage.local keeps the durable copy:
+// x.com can clear its own storage, and twitter.com is a separate origin with a
+// separate one.
+
+const SEEN_KEY = "xlf.seen";       // id -> [impressions, day], owned here
+const HIDDEN_KEY = "xlf.hidden";   // ids at or over the bar; the page world reads this
+const CLEARED_KEY = "xlf.cleared"; // when the ledger was last emptied, ms
+const SEEN_CAP = 8000;             // ids remembered, the stalest evicted first
+const SEEN_DAYS = 45;              // and forgotten this long after the last sighting
+const DAY = 86400000;
+const today = () => Math.floor(Date.now() / DAY);
+
+let seen = Object.create(null);
 let seenDirty = false;
+let hiddenDirty = false;
+// When this tab believes the ledger was last emptied. Forgetting has to reach
+// two places this tab does not control: another open tab, which holds the whole
+// map in memory and would merge it back over the empty file within seconds, and
+// the settings page, which usually runs with no x.com tab open at all and can
+// only clear the backup. So a clear is recorded as a time, both copies carry
+// it, and whoever sees a newer one drops what they were holding.
+let clearedAt = 0;
 
-function noteDelivered(ids) {
-  if (!ids || !ids.length || !cfg.hideSeenAfter) return;
-  for (const id of ids) seenCounts[id] = (seenCounts[id] || 0) + 1;
-  const keys = Object.keys(seenCounts);
-  if (keys.length > SEEN_CAP) {
-    for (const k of keys.slice(0, keys.length - SEEN_CAP)) delete seenCounts[k];
-  }
-  seenDirty = true;
-  publishSeen();
-}
+const readLocal = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const writeLocal = (k, v) => { try { localStorage.setItem(k, v); } catch { /* quota, private mode */ } };
 
-// Only the ids that have had their turn cross the boundary; the counts stay
-// here. Keeps the attribute to the ids that actually change a decision.
-function publishSeen() {
-  if (!cfg.hideSeenAfter) {
-    HTML.removeAttribute("data-xlf-seen");
-    return;
-  }
-  const done = [];
-  for (const id in seenCounts) {
-    if (seenCounts[id] >= cfg.hideSeenAfter) done.push(id);
-  }
+function parseSeen(raw) {
+  if (!raw) return null;
   try {
-    HTML.setAttribute("data-xlf-seen", done.slice(-SEEN_PUBLISH_CAP).join(","));
-  } catch {
-    /* the feature degrades, nothing else */
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" && !Array.isArray(o) ? o : null;
+  } catch { return null; }
+}
+
+// Two x.com tabs share one localStorage and neither knows what the other
+// counted, so a write merges instead of overwriting. Taking the larger count
+// under-counts when both tabs saw the same post independently, which costs one
+// more sighting before it is hidden. The other direction would hide posts you
+// never saw, so this is the side to err on.
+function mergeSeen(into, from) {
+  for (const id in from) {
+    const b = from[id];
+    // Anything not in the current shape is from the delivery-counting version,
+    // keyed by entry id rather than post id. It cannot be translated: drop it.
+    if (!Array.isArray(b) || b.length !== 2) continue;
+    const a = into[id];
+    into[id] = a ? [Math.max(a[0], b[0]), Math.max(a[1], b[1])] : [b[0], b[1]];
+  }
+  return into;
+}
+
+function pruneSeen() {
+  const cutoff = today() - SEEN_DAYS;
+  for (const id in seen) {
+    const e = seen[id];
+    if (!Array.isArray(e) || e[1] < cutoff) delete seen[id];
+  }
+  const live = Object.keys(seen);
+  if (live.length > SEEN_CAP) {
+    // Stalest first. A post still being re-served is worth remembering; one you
+    // last saw a month ago is not what is clogging the feed today.
+    live.sort((a, b) => seen[a][1] - seen[b][1]);
+    for (const id of live.slice(0, live.length - SEEN_CAP)) delete seen[id];
   }
 }
+
+// The only thing that crosses into the page world, and only the ids that
+// actually change a decision. Seeded from what is already on disk so that a
+// page load does not rewrite an identical string, and — more importantly — does
+// not overwrite a list computed with the user's real bar using one computed
+// with this file's default. That default is 2; at a bar of 3 the first response
+// of every page load would retire posts a read early, and the first response is
+// the whole reason this list lives on disk.
+let hiddenPublished = null;
+function publishHidden() {
+  const bar = Number(cfg.hideSeenAfter) || 0;
+  let out = "";
+  if (bar > 0) {
+    const ids = [];
+    for (const id in seen) if (seen[id][0] >= bar) ids.push(id);
+    out = ids.join(",");
+  }
+  if (out === hiddenPublished) return;
+  hiddenPublished = out;
+  // Deferred to the save tick. At a bar of 1 every post read changes
+  // membership, and this string runs to thousands of ids: writing it
+  // synchronously on each one puts a six-figure setItem in the middle of a
+  // scroll. The interceptor only needs it by the next response, and the flush
+  // on the way out covers a reload.
+  hiddenDirty = true;
+}
+
+function flushHidden() {
+  if (!hiddenDirty) return;
+  hiddenDirty = false;
+  writeLocal(HIDDEN_KEY, hiddenPublished || "");
+}
+
+function noteImpression(id) {
+  if (!id || !cfg.hideSeenAfter) return;
+  const e = seen[id];
+  if (e) { e[0]++; e[1] = today(); } else { seen[id] = [1, today()]; }
+  seenDirty = true;
+  publishHidden();
+}
+
+const seenSize = () => Object.keys(seen).length;
 
 function loadSeen() {
+  const local = parseSeen(readLocal(SEEN_KEY));
+  if (local) seen = mergeSeen(Object.create(null), local);
+  clearedAt = Number(readLocal(CLEARED_KEY)) || 0;
+  // Deliberately no publishHidden() here. cfg is still this file's defaults —
+  // the real one arrives in an async callback — so publishing now would
+  // overwrite a correct list with one computed at the wrong bar. What is
+  // already on disk was written by the last page load, at the right bar, and is
+  // exactly what the first response should be judged against.
+  hiddenPublished = readLocal(HIDDEN_KEY);
   if (!alive()) return;
-  chrome.storage.local.get({ seen: null }, (r) => {
-    if (r.seen && typeof r.seen === "object") seenCounts = r.seen;
-    publishSeen();
+  // The durable copy fills in whatever this origin has lost: cleared site data,
+  // or a first visit to x.com after a stretch on twitter.com.
+  chrome.storage.local.get({ seen: null, seenClearedAt: 0 }, (r) => {
+    // A clear from the settings page, which had no tab to talk to.
+    if ((r.seenClearedAt || 0) > clearedAt) {
+      forgetSeen(r.seenClearedAt);
+      return;
+    }
+    if (!r.seen || typeof r.seen !== "object") return;
+    seen = mergeSeen(mergeSeen(Object.create(null), r.seen), seen);
+    pruneSeen();
+    publishHidden();
+    seenDirty = true;
   });
 }
 
-function saveSeen() {
-  if (!seenDirty || !alive()) return;
+// Two clocks, because the two copies cost different amounts. localStorage is
+// the working copy, is what the page world actually reads, and is cheap. The
+// chrome.storage backup is a quarter of a megabyte that wakes the service
+// worker and every onChanged listener, so it goes at a minute's cadence and on
+// the way out.
+const BACKUP_EVERY = 60000;
+let lastBackup = 0;
+let backupDirty = false;
+
+function saveSeen(force) {
+  // Another tab may have emptied the ledger since the last save. Merging our
+  // copy over the top would put it straight back, and the panel's forget button
+  // has no way to reach that tab.
+  const stamp = Number(readLocal(CLEARED_KEY)) || 0;
+  if (stamp > clearedAt) {
+    clearedAt = stamp;
+    seen = Object.create(null);
+    seenDirty = false;
+    publishHidden();
+  }
+  if (seenDirty) {
+    seenDirty = false;
+    backupDirty = true;
+    seen = mergeSeen(mergeSeen(Object.create(null), parseSeen(readLocal(SEEN_KEY)) || {}), seen);
+    pruneSeen();
+    writeLocal(SEEN_KEY, JSON.stringify(seen));
+    publishHidden();
+  }
+  flushHidden();
+  if (!backupDirty || !alive()) return;
+  if (!force && Date.now() - lastBackup < BACKUP_EVERY) return;
+  backupDirty = false;
+  lastBackup = Date.now();
+  try { chrome.storage.local.set({ seen }); } catch { /* the ledger degrades, nothing else */ }
+}
+
+function forgetSeen(at) {
+  clearedAt = at || Date.now();
+  seen = Object.create(null);
   seenDirty = false;
-  try { chrome.storage.local.set({ seen: seenCounts }); } catch { /* ignore */ }
+  backupDirty = false;
+  countedThisLoad = new Set();
+  writeLocal(SEEN_KEY, "{}");
+  writeLocal(CLEARED_KEY, String(clearedAt));
+  hiddenPublished = null;
+  publishHidden();
+  flushHidden();   // this one is worth writing straight away
+  if (!alive()) return;
+  try {
+    chrome.storage.local.set({ seen: {}, seenClearedAt: clearedAt });
+  } catch { /* ignore */ }
+}
+
+/* ---------- what counts as seen ---------- */
+
+const DWELL_MS = 800;    // on screen this long before it counts
+const VISIBLE = 0.5;     // and at least half of it showing
+const FILLS = 0.6;       // or enough of it to fill the screen
+
+// Half of a post is the wrong test on its own, because a post taller than the
+// window can never reach it: a 2,000px demo video in an 800px viewport peaks at
+// 0.4 and would never retire. Those are precisely the posts this feed is made
+// of. So either half the post is showing, or the part that is showing fills
+// most of the window — which is what reading a tall post looks like.
+function readable(e) {
+  if (e.intersectionRatio >= VISIBLE) return true;
+  const root = e.rootBounds;
+  return !!root && root.height > 0 && e.intersectionRect.height >= root.height * FILLS;
+}
+
+// The permalink is the anchor wrapping the timestamp — the only /status/ link
+// in a post that is reliably the post's own. The other two candidates, the
+// /analytics link and a /photo/N link, carry no <time>.
+//
+// The parentElement step is load-bearing and was measured, not assumed. X puts
+// role="link" on the anchor itself, so closest() called on the anchor always
+// matches the anchor, and a check written the obvious way rejects every post on
+// the page. What it is actually looking for is a quoted post's container, which
+// wraps the anchor — so the walk has to start above it.
+function tweetIdOf(art) {
+  for (const a of art.querySelectorAll('a[href*="/status/"]')) {
+    if (!a.querySelector("time")) continue;
+    if (a.parentElement && a.parentElement.closest('[role="link"]')) continue;
+    const m = /\/status\/(\d+)/.exec(a.getAttribute("href") || "");
+    if (m) return m[1];
+  }
+  return null;
+}
+
+let watcher = null;
+const watched = new WeakSet();
+const dwelling = new WeakMap();
+// One count per post per page load. Scrolling back up to something is not
+// seeing it a second time; reloading and being served it again is, and that is
+// the case this whole feature exists for.
+let countedThisLoad = new Set();
+
+function onScreen(entries) {
+  for (const e of entries) {
+    const art = e.target;
+    if (e.isIntersecting && readable(e)) {
+      if (dwelling.has(art)) continue;
+      dwelling.set(art, setTimeout(() => {
+        dwelling.delete(art);
+        // Read the id when the dwell completes, not when it started: X recycles
+        // these elements, and the one in front of you now is what you saw.
+        const id = tweetIdOf(art);
+        if (!id || countedThisLoad.has(id)) return;
+        countedThisLoad.add(id);
+        noteImpression(id);
+      }, DWELL_MS));
+    } else {
+      const t = dwelling.get(art);
+      if (t) { clearTimeout(t); dwelling.delete(art); }
+    }
+  }
+}
+
+// X virtualises the timeline: a handful of articles exist at a time and they are
+// recycled constantly. A sweep on the tick this file already runs is cheaper and
+// far quieter than a MutationObserver over a page that mutates this much.
+function watchPosts() {
+  // Deliberately not gated on the filter being on. A pause shows you the raw
+  // feed, and posts read during one have been read; not counting them would
+  // make pausing a way to quietly reset the ledger.
+  if (!cfg.hideSeenAfter || !ourSurface()) return;
+  // Several thresholds, not two: a tall post's ratio may top out below 0.5, so
+  // the callback has to fire on the way up for readable() to get a look at it.
+  if (!watcher) {
+    watcher = new IntersectionObserver(onScreen, { threshold: [0, 0.1, 0.25, 0.5, 0.75] });
+  }
+  for (const art of document.querySelectorAll('article[data-testid="tweet"]')) {
+    if (watched.has(art)) continue;
+    watched.add(art);
+    watcher.observe(art);
+  }
 }
 
 // Reloading the extension orphans content scripts already running in open tabs.
@@ -242,12 +561,34 @@ function teardown() {
   if (torn) return;
   torn = true;
   timers.forEach(clearInterval);
+  watcher?.disconnect();
+  watcher = null;
+  // The page world reads its config from this attribute and treats absence as
+  // off. Leaving it behind would strand a filtered timeline with a dead bridge
+  // and no way to switch it off — the exact thing that design is meant to
+  // prevent.
+  HTML.removeAttribute("data-xlf");
   closePanel();
-  hudEl?.remove();
-  hudEl = null;
   gateEl?.remove();
   gateEl = null;
   HTML.classList.remove("xlf-gated");
+
+  // The pill stays, and says what happened. An orphan means the extension was
+  // reloaded under a live tab: filtering has just stopped, the ledger has
+  // stopped recording, and nothing here can talk to storage again. A pill that
+  // simply vanishes reads as a crash — which is exactly how it read the first
+  // time this happened. Cloned rather than relabelled, because the clone drops
+  // the listeners that would open a panel with no extension behind it.
+  if (hudEl?.isConnected) {
+    const dead = hudEl.cloneNode(true);
+    dead.dataset.tone = "warn";
+    const text = dead.querySelector(".xlf-hud-text");
+    if (text) text.textContent = "Extension reloaded · refresh";
+    dead.setAttribute("aria-label", "The extension was reloaded. Refresh the page to resume filtering.");
+    dead.addEventListener("click", () => location.reload());
+    hudEl.replaceWith(dead);
+  }
+  hudEl = null;
 }
 
 function loadLedger() {
@@ -288,9 +629,14 @@ const reasonLabel = (reason, c) =>
 function forecast(c) {
   const pool = ledger[modeOf(c)] || [];
   const counts = new Map();
+  const bar = Number(c.hideSeenAfter) || 0;
   let kept = 0;
   for (const r of pool) {
-    const v = rejudge(r, c);
+    // Repeats are not a bar, so rejudge() cannot see them. They are counted
+    // here so the panel's arithmetic adds up when you move the repeat dial.
+    const v = bar && r.id && (seen[r.id]?.[0] || 0) >= bar
+      ? { keep: false, reason: "already read" }
+      : rejudge(r, c);
     if (v.keep) kept++;
     else counts.set(v.reason, (counts.get(v.reason) || 0) + 1);
   }
@@ -318,13 +664,23 @@ function pillState() {
   if (!filterOn()) return { tone: "paused", text: `Paused · ${clock(pausedFor())} left` };
   const mode = cfg.searchFeed ? "Search" : "Home";
   if (!tally.judged) return { tone: "on", text: `${mode} · watching…` };
-  if (!tally.kept) return { tone: "warn", text: `Nothing passed · ${tally.judged} hidden` };
+  if (!tally.kept) {
+    return { tone: "warn", text: `Nothing passed · ${tally.judged} hidden` };
+  }
   let text = `${mode} · ${tally.kept} of ${tally.judged}`;
   if (tally.rescued) text += ` · ${tally.rescued} below bar`;
+  // Worth its own words. A feed that suddenly shows less is alarming unless it
+  // says why, and "you have read these already" is a different fact from
+  // "these were under the bar".
+  if (tally.reseen) text += ` · ${tally.reseen} read`;
+  // Rare, and worth admitting when it happens: the page had nothing left on it
+  // but posts you had read, so one went back rather than end the feed.
+  if (tally.repeated) text += ` · ${tally.repeated} repeat back`;
   return { tone: "on", text };
 }
 
 function setHud() {
+  if (torn) return;
   const show = cfg.showHud && ourSurface() && !gatedHere();
   if (!show) {
     hudEl?.remove();
@@ -362,8 +718,8 @@ document.addEventListener("xlf:stats", (e) => {
     tally.judged += s.judged || 0;
     tally.rescued += s.rescued || 0;
     tally.reseen += s.reseen || 0;
+    tally.repeated += s.repeated || 0;
     addRecords(s.records);
-    noteDelivered(s.delivered);
     setHud();
     if (panelEl) refreshForecast();
   } catch { /* cosmetic */ }
@@ -383,6 +739,9 @@ const FOLLOWER_STEPS = [
 const LIKE_STEPS = [[0, "off"], [0.25, "0.25%"], [0.5, "0.5%"], [1, "1%"], [2, "2%"], [3, "3%"]];
 const BOOKMARK_STEPS = [[0, "off"], [0.05, "0.05%"], [0.1, "0.1%"], [0.25, "0.25%"], [0.5, "0.5%"]];
 const KEEPALIVE_STEPS = [[0, "off"], [1, "1 post"], [2, "2 posts"], [3, "3 posts"]];
+const REPEAT_STEPS = [
+  [0, "never"], [1, "after 1 read"], [2, "after 2 reads"], [3, "after 3 reads"],
+];
 const SORT_STEPS = [["top", "Top"], ["live", "Latest"]];
 const PAUSES = [15, 30, 60];
 
@@ -429,13 +788,15 @@ function candidate() {
     minLikeRate: Number(controls.likeRate.value),
     minBookmarkRate: Number(controls.bookmarkRate.value),
     minPerPage: Number(controls.keepAlive.value),
+    hideSeenAfter: Number(controls.repeats.value),
   };
 }
 
 // The tuned keys, so "did anything change" is a real comparison rather than a
 // guess from counts.
 const TUNED = ["searchFeed", "minViews", "maxFollowers", "requireLaunch",
-  "searchLatest", "searchVideoOnly", "minLikeRate", "minBookmarkRate", "minPerPage"];
+  "searchLatest", "searchVideoOnly", "minLikeRate", "minBookmarkRate", "minPerPage",
+  "hideSeenAfter"];
 const sameBar = (a, b) => TUNED.every((k) => String(a[k]) === String(b[k]));
 
 function refreshForecast() {
@@ -448,7 +809,11 @@ function refreshForecast() {
   controls.caption.textContent = c.searchFeed
     ? "X search does the coarse cut; your gates trim what arrives."
     : "Everything the algorithm sends gets judged here. Expect a strict cut.";
-  controls.query.textContent = c.searchFeed ? buildSearchQuery(c) : "";
+  // The rotation advances on the way in, so cfg already points at the *next*
+  // window. What belongs on screen is the question this page actually asked.
+  const asked = isFeedSearch()
+    ? (new URLSearchParams(location.search).get("q") || "").trim() : "";
+  controls.query.textContent = c.searchFeed ? (asked || buildSearchQuery(c)) : "";
   controls.query.hidden = !c.searchFeed;
 
   if (!f.total) {
@@ -535,13 +900,22 @@ function buildPanel() {
   const bookmarkRate = select(BOOKMARK_STEPS, cfg.minBookmarkRate);
   const keepAlive = select(KEEPALIVE_STEPS, cfg.minPerPage);
   const keepAliveRow = row("Keep-alive", keepAlive);
+  const repeats = select(REPEAT_STEPS, cfg.hideSeenAfter);
+  const forget = el("button", "xlf-link", `Forget ${seenSize()} read posts`);
+  forget.type = "button";
+  forget.addEventListener("click", () => {
+    forgetSeen();
+    forget.textContent = "Forgotten";
+    forget.disabled = true;
+    refreshForecast();
+  });
 
   const more = document.createElement("details");
   more.className = "xlf-more";
   const sum = document.createElement("summary");
   sum.textContent = "More gates";
-  more.append(sum, row("Like rate at least", likeRate),
-    row("Bookmark rate at least", bookmarkRate), keepAliveRow);
+  more.append(sum, row("Retire a post", repeats), row("Like rate at least", likeRate),
+    row("Bookmark rate at least", bookmarkRate), keepAliveRow, forget);
 
   const summary = el("div", "xlf-summary");
   const bars = el("div", "xlf-bars");
@@ -563,15 +937,15 @@ function buildPanel() {
 
   controls = {
     mode: modeOf(cfg), views, followers, sort, launch: launch.input,
-    video: video.input, likeRate, bookmarkRate, keepAlive, keepAliveRow,
+    video: video.input, likeRate, bookmarkRate, keepAlive, keepAliveRow, repeats,
     searchRows: [sortRow, video.wrap], caption, query, summary, bars, warn,
   };
   for (const k in segs) {
     segs[k].classList.toggle("on", k === controls.mode);
     segs[k].setAttribute("aria-checked", String(k === controls.mode));
   }
-  [views, followers, sort, likeRate, bookmarkRate, keepAlive, launch.input, video.input]
-    .forEach((n) => n.addEventListener("change", refreshForecast));
+  [views, followers, sort, likeRate, bookmarkRate, keepAlive, repeats, launch.input,
+    video.input].forEach((n) => n.addEventListener("change", refreshForecast));
 
   apply.addEventListener("click", () => {
     apply.disabled = true;
@@ -582,6 +956,7 @@ function buildPanel() {
       requireLaunch: c.requireLaunch, searchLatest: c.searchLatest,
       searchVideoOnly: c.searchVideoOnly, minLikeRate: c.minLikeRate,
       minBookmarkRate: c.minBookmarkRate, minPerPage: c.minPerPage,
+      hideSeenAfter: c.hideSeenAfter,
     }, () => location.reload());
   });
   cancel.addEventListener("click", closePanel);
@@ -694,7 +1069,7 @@ function apply() {
 loadLedger();
 loadSeen();
 timers.push(setInterval(saveLedger, 4000));
-timers.push(setInterval(saveSeen, 5000));
+timers.push(setInterval(saveSeen, 3000));
 
 chrome.storage.local.get(null, (all) => {
   stored = all || {};
@@ -702,7 +1077,18 @@ chrome.storage.local.get(null, (all) => {
   delete stored.seen;
   cfg = { ...LOCAL, ...stored };
   publishConfig();
+  publishHidden();
   apply();
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+  if (msg?.type === "forgetSeen") {
+    forgetSeen();
+    tally.reseen = 0;
+    setHud();
+    respond({ ok: true });
+  }
+  return false;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -711,10 +1097,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (Object.keys(changes).every((k) => noise.includes(k))) return;
   for (const [k, { newValue }] of Object.entries(changes)) {
     if (noise.includes(k)) continue;
+    // A removed key arrives as undefined. Falling back to the default keeps a
+    // feature switched on rather than silently off, and keeps this side
+    // agreeing with the interceptor, which always re-defaults.
     stored[k] = newValue;
-    cfg[k] = newValue;
+    cfg[k] = newValue === undefined ? LOCAL[k] : newValue;
   }
   publishConfig();
+  publishHidden();
   apply();
 });
 
@@ -724,15 +1114,33 @@ timers.push(setInterval(() => {
   detectTheme();
   if (location.href !== lastHref) {
     lastHref = location.href;
-    tally = { kept: 0, judged: 0, rescued: 0, reseen: 0 };
+    tally = { kept: 0, judged: 0, rescued: 0, reseen: 0, repeated: 0 };
+    // A new surface is a new sitting. Seeing the same post on home and then in
+    // search is being served it twice, and should count twice.
+    countedThisLoad = new Set();
     closePanel();
+    publishConfig();
     apply();
   }
+  watchPosts();
 }, 400));
 
 // A pause can expire while the tab sits open.
 timers.push(setInterval(apply, 2000));
-window.addEventListener("beforeunload", () => { saveLedger(); saveSeen(); });
+const flush = (force) => { saveLedger(); saveSeen(force); };
+// beforeunload alone is not enough: a reload from the keyboard fires it, but a
+// backgrounded tab that Chrome later discards does not, and an impression
+// counted seconds before a reload is exactly the one that matters.
+window.addEventListener("beforeunload", () => flush(true));
+window.addEventListener("pagehide", () => flush(true));
+// Not forced. Hiding a tab is an alt-tab, not a departure, and forcing the
+// durable write here would push a quarter of a megabyte into chrome.storage on
+// every window switch — waking the service worker to do nothing. The
+// localStorage copy, which is the one that matters for the next response, is
+// written either way.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flush(false);
+});
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", apply, { once: true });

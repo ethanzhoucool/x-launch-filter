@@ -23,6 +23,7 @@ reports outcomes, never settings:
 ```
 Search · 31 of 38                 filtering the search feed
 Home · 12 of 96 · 2 below bar     filtering home, with keep-alive filler
+Home · 9 of 96 · 14 read          14 of them you had already read
 Home · watching…                  nothing judged yet
 Nothing passed · 96 hidden        the bar is higher than anything that arrived
 Paused · 12m left                 paused, and it re-arms itself
@@ -79,6 +80,9 @@ show its new-user welcome screen. The panel warns when the two dials are set
 against each other. Pair a follower ceiling with a *low* view floor: 10k to 25k
 is where breakout posts from small accounts actually live.
 
+**Whether you have already read it.** Covered on its own below, because it is
+the gate that behaves least like the others.
+
 **A launch score,** which has to reach 2:
 
 | signal | weight |
@@ -112,6 +116,74 @@ because reach outruns engagement. Stacking a high view floor on top of a high
 rate floor returns nothing at all. Lead with one or the other. On these numbers
 a 5% like-rate gate is unreachable, 1% is already above the median, and a 0.1%
 bookmark rate is strong.
+
+## Posts you have already read
+
+X re-serves the same posts relentlessly, and a bar that admits one post in eight
+makes it worse: the survivors are the same handful of big posts every time.
+Measured on a live feed, reloading the identical URL returned **100% the same
+posts** — 4 of 4 on Top, 3 of 3 on Latest, and a third load later in the session
+returned the same four again. The judged counts were identical too, so this is
+X's own caching rather than the filter concentrating on the same survivors. So a
+post retires. Two readings by default, adjustable from the panel, and after that
+it is dropped from the response like anything else that fails a gate.
+
+**Read means read.** The post's own article has to be at least half on screen
+for 800ms, or — for a post taller than the window, which can never reach half —
+showing enough of itself to fill 60% of the window. Measured on a live feed,
+posts ran 204px to 684px against a 589px window, so the tallest topped out at a
+0.86 ratio and the second rule is a guard rather than a fix for something seen
+failing. It cannot cost anything: it only adds a way to qualify.
+Not delivered, not rendered — on your screen, long enough to take in.
+The first version of this counted deliveries instead, and that was wrong in both
+directions at once: X hands over posts you never scroll to, while a post you
+stare at for a minute counts once. Scrolling back up to something in the same
+sitting is not a second reading either. Reloading and being served it again is,
+which is the case the feature exists for.
+
+Counting continues while the filter is paused. A pause shows you the raw feed,
+and posts read during one have been read; not counting them would make pausing a
+way to quietly reset the ledger.
+
+**Identity is the post's id**, taken from `rest_id`, never the entry id. Entry
+ids are a property of the response rather than the post: a conversation module
+mints a fresh one per page, a promoted slot carries its own prefix, and the same
+post arrives under different ids on home and in search. Keying on them split one
+post's exposure across several counters, none of which ever reached two.
+
+**The ledger lives in `localStorage`**, which is the only part of this worth
+explaining. The interceptor runs in the page's world, inside a synchronous XHR
+getter, and cannot await `chrome.storage`. The first timeline response of a page
+load arrives before any async read can finish — so with the list published from
+a storage callback, the top of the feed on a reload was always judged against an
+empty list. That is precisely the page where repeats are noticed. `localStorage`
+is shared with the page's origin and readable synchronously from both worlds, so
+the list is in place before the first response lands. `chrome.storage.local`
+still holds the durable copy, because x.com can clear its own storage and
+twitter.com is a separate origin with a separate one.
+
+Eight thousand posts are remembered, forgotten 45 days after their last
+sighting, and the stalest go first when the cap is reached. The settings page
+says roughly how many are held and clears them, and so does the panel.
+
+**Clearing is recorded as a time, not an absence**, because emptying a map is
+not enough to make a ledger go away. Another open tab is holding the whole thing
+in memory and would merge it back over the emptied file within seconds; the
+settings page usually opens with no x.com tab to talk to at all, and can only
+reach the backup, which the next page load would load straight back. So a clear
+writes a timestamp everywhere it can reach, and every ledger drops whatever it
+holds when it sees one newer than its own. The count on the settings page is
+labelled as approximate for the same reason — it reads the backup, which lags by
+up to a minute — and the button is never disabled on the strength of it, since a
+stale zero must not take away the only way to clear a ledger that is actually
+holding hundreds.
+
+**It can empty a page, and that is handled twice.** A page whose every post you
+had already read has nothing to give X, and a page with nothing on it cannot be
+scrolled, which ends the feed permanently. First the interceptor fetches the
+next page itself. If that fails too, the strongest single repeat goes back — not
+as filler, which is reserved for below-bar posts, but because one repeat beats a
+timeline that has stopped.
 
 ## Search as the feed
 
@@ -172,6 +244,43 @@ roughly one post in eight clears even 50k views.
 Sorting defaults to Top rather than Latest. Latest gets flooded by whatever news
 cycle is running, which is how the Iran stories got in.
 
+### The window moves
+
+Retiring posts and a fixed query work against each other. One query sorted by
+Top is a nearly static ranking: it returns the same page every visit, the ledger
+correctly retires all of it, and the feed goes blank. Dedupe alone converts a
+repetitive feed into an empty one.
+
+So each trip into the feed asks for a different stretch of days — the last two,
+then two to five back, five to ten, ten to twenty-one, then no window at all —
+rotating in that order and persisting across visits.
+
+The window is the only lever that was measured to work. Against the base query's
+results on a live page:
+
+| variant | overlap with the base query |
+| --- | --- |
+| `since:` / `until:` over a three-day window | **0 of 4** |
+| `since_time:` / `until_time:`, same window | **0 of 4** |
+| `min_faves` dropped from 400 to 50 | 4 of 4 |
+| `min_faves` removed entirely | 4 of 4 |
+| Latest instead of Top | 2 of 3 |
+
+Both date forms are honoured and both return a completely disjoint set. Moving
+`min_faves` does nothing visible, because the view floor selects the same top
+posts regardless of where the like floor sits. Rewording the terms reshuffles.
+Only the calendar actually moves the feed.
+
+The unwindowed query, which repeats the most, comes round least often.
+
+The shipped rotation was then checked as it is generated, against live results:
+three consecutive windows returned four posts each, none of them empty, and
+**11 of the 12 were distinct**. The one duplicate sat on the boundary between
+two adjacent windows — and the ledger catches that one, which is the point of
+having both.
+
+Off with a single checkbox, and ignored entirely when you write your own query.
+
 ## Where it applies
 
 - **Home timeline**: always filtered, both For You and Following.
@@ -179,6 +288,22 @@ cycle is running, which is how the Iran stories got in.
 - **Search and profiles**: untouched by default. Searching is the deliberate
   behaviour this is trying to push you back toward. Both can be filtered from
   settings.
+- **A search you typed**: never filtered by the feed setting alone. Turning the
+  search feed on used to filter every search invisibly, and the pill did not
+  appear to say so because it used a stricter test than the filter did. That was
+  survivable when the only consequence was a high bar. It is not once posts
+  retire — looking up something you read yesterday would come back empty and
+  look like X had lost it. The page world is now handed the exact queries that
+  count as the feed, so the two tests agree.
+
+**The feed is identified with the date window stripped off.** Comparing whole
+queries put a clock inside the test: the window is rebuilt from `Date.now()`, so
+at UTC midnight every generated query changed while an open tab kept the one it
+was loaded with. Nothing matched, the surface stopped counting as the feed, and
+that tab quietly served everything unfiltered for the rest of its life, with no
+pill to say so. A tab restored by Chrome from a previous session had the same
+problem from the moment it opened. What identifies the feed is everything except
+the window.
 
 The popup also carries four one-click launch searches built from X's advanced
 operators. X search has no `min_views` operator, so those queries use
@@ -257,6 +382,18 @@ day; a broken timeline is a bug report.
 
 - **Posts stop being filtered** → the operation names and entry paths in
   `src/intercept.js`, and the field names in `XLF.fromApi()`.
+- **Repeats come back** → first check whether `localStorage["xlf.seen"]` is
+  growing at all. If it is empty after a session, `tweetIdOf()` has stopped
+  resolving posts: **X sets `role="link"` on the permalink anchor itself**, so
+  `a.closest('[role="link"]')` matches the anchor and rejects every post on the
+  page. The walk has to start at `a.parentElement`. That exact mistake shipped
+  once and recorded zero impressions while looking perfectly healthy, because
+  the pill counts what the API sent, not what you read. Then check whether
+  `rest_id` still sits at
+  `content.itemContent.tweet_results.result.rest_id`. Note that a conversation
+  module's entry id is derived from its **last** item, not its root, so it
+  changes when a different reply is attached — which is why nothing here keys on
+  entry ids.
 - **The timeline breaks entirely** → disable the extension and check whether
   `filterPayload` is dropping cursor entries.
 
@@ -304,7 +441,10 @@ So this does not try to fake a gesture. Two defences instead, cheapest first.
 **Ask for a bigger page.** Starvation is arithmetic: X sends 20 posts, a strict
 bar keeps one, the sentinel never moves. The outgoing request's `variables.count`
 is rewritten to 60, so the same bar keeps roughly three times as many and the
-page usually keeps growing on its own. Rewriting `variables` is well precedented
+page usually keeps growing on its own. This works on home, where a page came
+back with 35 entries; **search appears to cap it at 20** regardless of what is
+asked for, so inflation does not relieve starvation on the surface that needs it
+most. Rewriting `variables` is well precedented
 — Control Panel for Twitter does exactly this in production to force reply
 sorting — and it leaves method and path alone, so X's request signature stays
 valid. It is unverified against X's server, so it backs itself out: the first
@@ -312,7 +452,32 @@ inflated request that returns anything unusable disables inflation for the rest
 of the session and every later request goes out exactly as X wrote it.
 
 **Rescue a dead-ended feed.** When a page still keeps nothing, the interceptor
-fetches the next page itself and hands X a response worth rendering. That case
+fetches the next page itself and hands X a response worth rendering. This was
+unreachable for its whole life until 1.1.0 — it read `url` and `headers` off the
+XHR, which has neither — and nothing noticed, because every failure path in that
+file is silent by design.
+
+**It is now opt-in, and off by default.** Fixing it revealed that **X has since
+closed the door it walked through**.
+Replaying a captured request now needs `x-client-transaction-id`, and that
+header is effectively single-use: measured live, the exact captured URL returns
+200 once and 404 on every replay after it, while omitting the header is a 404
+outright. The reasoning that once made the empty-page case unconditional — blocking
+briefly beats a feed that has stopped — assumed the fetch could work. It cannot,
+so what is left is a synchronous request that buys nothing, and a synchronous
+XHR cannot be given a timeout: a hung request is a hung tab. The code is kept,
+behind the same switch as the thin-page case, because X's requirements move. It
+also stands itself down after a single failure.
+
+**A page is never handed back empty**, whatever keep-alive is set to. Keep-alive
+off means "accept the occasional thin page"; it cannot mean accept an empty one,
+because a page with no posts is shorter than the viewport, so there is no scroll
+gesture to make, X is never asked for more, and the feed is over until you
+reload by hand. Nobody expressed that preference. One post is the difference
+between a thin feed and no feed, and it costs nothing on the network.
+
+So the anti-starvation story rests on the rotation and the filler rather than on
+fetching ahead. That case
 is unconditional, because a page with no posts is not merely thin: the document
 is no taller than the viewport, so there is no scroll gesture available and X
 will never be asked again. Blocking briefly beats a feed that has stopped. The
@@ -339,6 +504,39 @@ in this extension is silent by design, which makes an unfiltered feed and a
 crashed filter look identical without it.
 
 **Counts are per-surface.** The corner counter resets on route changes.
+
+**Reloading the extension stops open tabs.** Chrome orphans content scripts
+already running, so filtering stops, the ledger stops recording, and nothing in
+that tab can reach storage again. The pill stays put and says
+`Extension reloaded · refresh` rather than vanishing, because a pill that simply
+disappears reads as a crash. Clicking it reloads the page.
+
+**Two tabs under-count rather than over-count.** They share one `localStorage`
+and merge on write by taking the larger count, so a post both tabs saw
+independently registers one reading, not two. The other direction would retire
+posts you never read, which is the worse failure.
+
+## Tests
+
+```
+node test/run.js
+```
+
+Thirteen of them, and they run in Node with no browser and no dependencies.
+`test/harness.js` builds enough of x.com to load both halves of the extension
+into separate `vm` contexts that share one document and one `localStorage` —
+which is how Chrome arranges them, and where every bug in the repeat feature
+lived. The suite drives real timeline payloads through the patched XHR getter
+and real viewport events through the impression observer, so it covers the
+handoff rather than each side's arithmetic.
+
+One of them just compares the three default tables — `scoring.js`,
+`background.js` and the fallbacks in `content.js` — key by key. That is not
+ceremony: `content.js` cannot import `scoring.js`, because Chrome injects a file
+into one world only, so its defaults are a hand copy. A key present in one and
+missing in the other reads as `undefined`, which is falsy, which silently
+disables whatever it gates. That is exactly how retiring posts came to be dead
+code for its entire life.
 
 ## Testing the classifier without a browser
 
@@ -375,11 +573,12 @@ looking at results lives on the pill.
 manifest.json
 src/scoring.js       the classifier: keyword lists, the bars, the verdict
 src/intercept.js     page world: filters posts out of the API response
-src/content.js       isolated world: config bridge, pill, panel, ledger, gate
+src/content.js       isolated world: config bridge, pill, panel, ledgers, gate
 src/filter.css       the counter and the Explore gate
 src/background.js    lock state, relock alarm, badge
-popup/               status, launch searches, hold-to-unlock
-options/             view floor, engagement rates, keywords
+popup/               status, launch searches, pause
+options/             view floor, engagement rates, keywords, the read ledger
+test/                a fake x.com, both worlds, no dependencies
 icons/make_icons.py  regenerates the PNGs, no dependencies
 ```
 

@@ -15,6 +15,7 @@ const BOOLS = [
   "topUp",
   "searchLatest",
   "searchVideoOnly",
+  "searchRotate",
 ];
 const TEXTS = ["extraInclude", "extraExclude", "searchQuery"];
 
@@ -75,6 +76,34 @@ async function init() {
         flashSaved();
       }, 400);
     });
+  });
+
+  // The authoritative ledger lives in x.com's own localStorage; this is the
+  // backup, and it lags by up to a minute. So the count is approximate and the
+  // button is never disabled on the strength of it — a stale zero here must not
+  // take away the only way to clear a ledger that is actually holding hundreds.
+  const countEl = document.getElementById("seen-count");
+  const forgetEl = document.getElementById("forget-seen");
+  const { seen = {} } = await chrome.storage.local.get({ seen: {} });
+  const n = Object.keys(seen).length;
+  countEl.textContent = n
+    ? `Remembering about ${n} post${n === 1 ? "" : "s"} you have read.`
+    : "Nothing recorded yet.";
+  forgetEl.addEventListener("click", async () => {
+    // The timestamp is what makes this work. This page usually opens with no
+    // x.com tab to talk to, so clearing the backup alone would be undone the
+    // moment a tab loaded its own copy back. Every ledger checks this stamp and
+    // drops anything older than it.
+    await chrome.storage.local.set({ seen: {}, seenClearedAt: Date.now() });
+    const tabs = await chrome.tabs.query({
+      url: ["*://x.com/*", "*://www.x.com/*", "*://twitter.com/*", "*://www.twitter.com/*"],
+    });
+    for (const tab of tabs) {
+      chrome.tabs.sendMessage(tab.id, { type: "forgetSeen" })
+        .catch(() => { /* no content script in that tab */ });
+    }
+    countEl.textContent = "Forgotten.";
+    flashSaved();
   });
 
   document.getElementById("sum-include").textContent =

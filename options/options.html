@@ -62,15 +62,21 @@
           >
         </label>
         <label class="field">
-          <span>Hide repeats <em>X re-serves the same posts constantly; this
-            drops one once it has had its turn</em></span>
+          <span>Retire a post <em>X re-serves the same posts constantly. A post
+            counts as read once it has been on your screen long enough to read,
+            not merely sent — so this never retires something you scrolled
+            straight past.</em></span>
           <select id="hideSeenAfter">
-            <option value="0">never hide repeats</option>
-            <option value="1">after showing it once</option>
-            <option value="2">after showing it twice</option>
-            <option value="3">after showing it three times</option>
+            <option value="0">never, show repeats</option>
+            <option value="1">after 1 read</option>
+            <option value="2">after 2 reads</option>
+            <option value="3">after 3 reads</option>
           </select>
         </label>
+        <p class="hint">
+          <span id="seen-count">Nothing read yet.</span>
+          <button type="button" id="forget-seen">Forget them</button>
+        </p>
         <label class="field">
           <span>Posts per request <em>X sends 20; asking for more means a strict
             bar still leaves enough on the page to scroll</em></span>
@@ -120,6 +126,17 @@
         </label>
         <label class="check">
           <input type="checkbox" id="searchVideoOnly" /><span>Video posts only</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="searchRotate" />
+          <span>
+            Move the window between visits
+            <em>Retiring posts you have read empties a fixed query as you
+            exhaust it. Each trip to the feed asks for a different stretch of
+            days instead — the last two, then two to five back, and so on — so
+            there is new material to find rather than the same ranking with
+            holes in it. Ignored when you write your own query.</em>
+          </span>
         </label>
         <label class="field col">
           <span>Custom query <em>leave empty to build one from the settings above</em></span>

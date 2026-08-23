@@ -23,6 +23,22 @@ header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
 .sub { font-size: 12.5px; color: #6b6b74; margin-top: 2px; }
 
+/* The ledger's escape hatch: a count of what is remembered, and a way to
+   drop it. A feature that silently withholds posts needs both. */
+.hint button {
+  margin-left: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #2a2a31;
+  background: #17171c;
+  color: #f4f4f5;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.hint button:hover:not(:disabled) { border-color: #3d3d46; }
+.hint button:disabled { opacity: 0.4; cursor: default; }
+
 .notice {
   padding: 12px 14px;
   border-radius: 10px;

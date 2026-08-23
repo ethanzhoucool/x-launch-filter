@@ -35,9 +35,15 @@ self.XLF = (() => {
     // Posts to request per page. X defaults to 20; asking for more is the
     // cheapest defence against a strict bar starving the feed. 0 leaves it be.
     pageSize: 60,
-    // Hide a post once it has been handed over this many times. 0 keeps
-    // showing repeats.
+    // Hide a post once you have actually laid eyes on it this many times. 0
+    // keeps showing repeats. "Seen" is measured in the viewport, not at the
+    // API: see the ledger in src/content.js.
     hideSeenAfter: 2,
+    // Vary the generated search query between visits. Hiding repeats empties a
+    // fixed query as you exhaust it; rotating the window is what refills it.
+    searchRotate: true,
+    // Which window is next. Advanced on each redirect into the feed.
+    searchRotation: 0,
     requireLaunch: true,
     hideAds: true,
     hideReplies: true,
@@ -238,6 +244,11 @@ self.XLF = (() => {
     const media = legacy.extended_entities?.media || legacy.entities?.media || [];
 
     return {
+      // The post's own id, not the entry's. Entry ids are a property of the
+      // response — a conversation module mints a new one per page and the same
+      // post carries different ones on home and in search — so remembering
+      // what you have already been shown has to key on this.
+      id: String(t.rest_id || legacy.id_str || "") || null,
       views: Number(t.views?.count) || 0,
       followers: followersOf(t),
       likes: legacy.favorite_count || 0,
@@ -345,6 +356,7 @@ self.XLF = (() => {
   function record(post, cfg) {
     if (!post) return null;
     return {
+      id: post.id || null,
       v: post.views || 0,
       lr: rate(post.likes, post.views),
       br: rate(post.bookmarks, post.views),

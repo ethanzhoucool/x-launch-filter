@@ -12,6 +12,8 @@ const DEFAULTS = {
   topUp: false,
   pageSize: 60,
   hideSeenAfter: 2,
+  searchRotate: true,
+  searchRotation: 0,
   requireLaunch: true,
   hideAds: true,
   hideReplies: true,

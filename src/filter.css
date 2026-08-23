@@ -374,6 +374,8 @@ html:not([data-xlf-theme]) {
   cursor: pointer;
 }
 #xlf-panel .xlf-link:hover { color: var(--xlf-text); }
+#xlf-panel .xlf-more > .xlf-link { margin-top: 10px; }
+#xlf-panel .xlf-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 
 /* ---------- explore gate ---------- */
 

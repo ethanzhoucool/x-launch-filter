@@ -71,13 +71,38 @@
       return cfg;
     }
     cfg.filterOn = cfg.enabled !== false && Date.now() >= (cfg.unlockUntil || 0);
+    cfg.hidden = cfg.hideSeenAfter > 0 ? hiddenIds() : null;
     return cfg;
+  }
+
+  // Only the queries the isolated world generates for the feed, since the query
+  // is built over there. Without this, turning the search feed on quietly
+  // filtered every search you typed as well — and the pill did not appear to
+  // say so, because it uses a stricter test. That was survivable while the only
+  // consequence was a high bar. It is not now: a post retires once you have
+  // read it, so searching for something you read yesterday would come back
+  // empty and look like X had lost it.
+  // Compared with the date window stripped off both sides. The window is
+  // rebuilt from the clock, so comparing whole queries meant that at UTC
+  // midnight a tab sitting on the feed stopped recognising itself and quietly
+  // served everything unfiltered for the rest of its life.
+  const stripWindow = (q) =>
+    String(q || "").replace(/\s*\b(?:since|until)(?:_time)?:\S+/gi, "").replace(/\s+/g, " ").trim();
+
+  function onFeedQuery(cfg) {
+    if (!cfg.feedQueryBase) return false;
+    try {
+      const q = (new URLSearchParams(location.search).get("q") || "").trim();
+      return !!q && stripWindow(q) === cfg.feedQueryBase;
+    } catch {
+      return false;
+    }
   }
 
   const appliesTo = (opName, cfg) => {
     const surface = OPS[opName];
     if (surface === "home") return true;
-    if (surface === "search") return !!cfg.filterSearch || !!cfg.searchFeed;
+    if (surface === "search") return !!cfg.filterSearch || (!!cfg.searchFeed && onFeedQuery(cfg));
     if (surface === "profile") return !!cfg.filterProfiles;
     return false;
   };
@@ -116,6 +141,12 @@
     if (single) {
       const promoted = !!content.itemContent?.promotedMetadata;
       const post = self.XLF.fromApi(single, { promoted });
+      // Before the bars, and before the record: a post you have already read is
+      // not worth the slot whatever else it scores, and it must not come back
+      // as filler either.
+      if (alreadySeen(post, cfg)) {
+        return { keep: false, judged: 1, reason: "seen", seen: true, views: post.views || 0 };
+      }
       const v = self.XLF.judge(post, cfg);
       return {
         keep: v.keep, judged: 1, reason: v.reason, views: v.stats?.views || 0,
@@ -131,12 +162,23 @@
       let judged = 0;
       let best = 0;
       let rec = null;
+      let root = true;
       for (const it of content.items) {
         const r = it?.item?.itemContent?.tweet_results?.result;
         if (!r) continue;
         judged = 1;
         const promoted = !!it.item.itemContent.promotedMetadata;
         const post = self.XLF.fromApi(r, { promoted });
+        // A withheld or tombstoned item parses to nothing and tells us nothing.
+        // Skipping it before the root check matters: otherwise it consumes the
+        // check, and a thread whose first item is a tombstone can never retire.
+        if (!post) continue;
+        // A thread is kept or dropped whole, so it is also retired whole, on
+        // the root post — the one you actually read.
+        if (root && alreadySeen(post, cfg)) {
+          return { keep: false, judged: 1, reason: "seen", seen: true, views: post.views || 0 };
+        }
+        root = false;
         const v = self.XLF.judge(post, cfg);
         best = Math.max(best, v.stats?.views || 0);
         if (!rec) rec = self.XLF.record(post, cfg);
@@ -153,19 +195,33 @@
 
   /* ---------- posts already seen ---------- */
 
-  // The isolated world counts how often each post has been handed over and
-  // publishes the ids that have had their turn. Parsed once per change rather
-  // than per response: this list runs to a thousand ids.
+  // The isolated world watches which posts actually reach the viewport and
+  // writes the ids that have had their turn here. localStorage rather than a
+  // DOM attribute because that side reads its ledger out of chrome.storage,
+  // which is async, while this side reads inside a synchronous getter — the
+  // first response of a page load always won that race, so a reload always
+  // served its repeats. localStorage is shared with this world and readable
+  // synchronously, so the list is in place before the first response lands.
+  //
+  // Re-parsed only when the string changes: it runs to thousands of ids and is
+  // read on every response.
   let seenRaw = null;
   let seenSet = new Set();
-  function seenIds() {
-    const raw = document.documentElement.getAttribute("data-xlf-seen") || "";
+  function hiddenIds() {
+    let raw = "";
+    try { raw = localStorage.getItem("xlf.hidden") || ""; } catch { raw = ""; }
     if (raw !== seenRaw) {
       seenRaw = raw;
       seenSet = new Set(raw ? raw.split(",") : []);
     }
     return seenSet;
   }
+
+  // Keyed on the post's own id. Entry ids looked like an easy handle and are
+  // not one: a conversation module mints a fresh one per response, and the same
+  // post carries different ones on home and in search.
+  const alreadySeen = (post, cfg) =>
+    !!(cfg.hidden && post && post.id && cfg.hidden.has(post.id));
 
   /* ---------- breaking the deadlock ---------- */
 
@@ -198,6 +254,10 @@
   const TOPUP_PAGES_EMPTY = 3;
   const TOPUP_PAGES_THIN = 2;
 
+  // These fetches are synchronous, so each failure costs a blocked main thread
+  // for a whole round trip. One is a diagnosis; three per page is a frozen tab.
+  let topUpOff = false;
+
   function syncFetch(url, headers) {
     const x = new XMLHttpRequest();
     x.open("GET", url, false); // synchronous: the getter cannot await
@@ -226,7 +286,9 @@
     let judged = 0;
     let dropped = 0;
     for (let round = 0; round < maxPages && gained.length < want && at; round++) {
-      const page = findEntries(syncFetch(inflatePage(urlWithCursor(req.url, at), cfg), req.headers));
+      const page = findEntries(
+        syncFetch(inflatePage(urlWithCursor(req.__xlfUrl, at), cfg), req.__xlfHeaders)
+      );
       if (!page || !page.length) break;
       for (const entry of page) {
         if (isCursor(entry)) continue;
@@ -259,30 +321,31 @@
     let dropped = 0;
     let reseen = 0;
     const cut = [];
+    // Repeats are held separately. They are not filler — putting one back is the
+    // thing the user asked to stop — but a page whose every post was a repeat
+    // has nothing else to give X, and a page with nothing on it cannot be
+    // scrolled, which ends the feed for good. One repeat beats a dead timeline.
+    const repeats = [];
     // Every judgement is kept, not just the counts. The panel re-scores these
     // against candidate settings so tuning does not need a reload to be legible.
     const records = [];
 
-    const seen = cfg.hideSeenAfter > 0 ? seenIds() : null;
-
     for (let i = entries.length - 1; i >= 0; i--) {
-      // A post you have already been shown its share of times is not worth the
-      // slot, whatever else it scores.
-      if (seen && seen.size && !isCursor(entries[i]) && seen.has(entries[i].entryId)) {
-        judged++;
-        dropped++;
-        reseen++;
-        entries.splice(i, 1);
-        continue;
-      }
       const v = entryVerdict(entries[i], cfg);
       judged += v.judged;
       if (v.record) records.push(v.record);
-      if (!v.keep) {
-        dropped++;
+      if (v.keep) continue;
+      dropped++;
+      // The filler puts the strongest rejects back to keep a starved page
+      // scrollable. A repeat is never one of them: putting it back is exactly
+      // the thing that was asked not to happen.
+      if (v.seen) {
+        reseen++;
+        repeats.push({ entry: entries[i], views: v.views || 0 });
+      } else {
         cut.push({ entry: entries[i], views: v.views || 0 });
-        entries.splice(i, 1);
       }
+      entries.splice(i, 1);
     }
 
     if (!judged) {
@@ -296,9 +359,22 @@
     const survivorsBefore = judged - dropped;
     const empty = judged > 0 && survivorsBefore === 0;
     const thin = survivorsBefore < 2;
+    // req is the XHR itself, and an XHR has no `url` or `headers` — it carries
+    // the ones stashed in open(). Reading the DOM-standard names here meant this
+    // whole rescue was unreachable from the day it was written, which went
+    // unnoticed because every failure path in this file is silent. It matters
+    // more now: dropping repeats empties pages that used to merely thin out.
+    // Opt-in for both cases now, where the empty one used to be unconditional.
+    // The reasoning that made it unconditional — blocking briefly beats a feed
+    // that has stopped — assumed the fetch could work. Measured 2026-08-21 it
+    // cannot: X requires a single-use x-client-transaction-id, so a replay is a
+    // 404. What is left is a synchronous XHR on the main thread that buys
+    // nothing, and a synchronous XHR cannot be given a timeout, so a hung
+    // request is a hung tab. The filler below keeps the page alive instead,
+    // without touching the network.
     if (
-      (empty || (thin && cfg.topUp === true)) && judged &&
-      req?.url && req?.headers && bottom?.content?.value
+      !topUpOff && cfg.topUp === true && (empty || thin) && judged &&
+      req?.__xlfUrl && req?.__xlfHeaders && bottom?.content?.value
     ) {
       try {
         const r = topUp(req, bottom.content.value, cfg, 4,
@@ -313,7 +389,8 @@
         // Only ever advance to a cursor whose page we actually consumed.
         if (r.cursor && r.cursor !== bottom.content.value) bottom.content.value = r.cursor;
       } catch (e) {
-        log("top-up failed, returning the page as filtered:", e);
+        topUpOff = true;
+        log("top-up failed, not trying again this session:", e);
       }
     }
 
@@ -322,13 +399,27 @@
     // end, put the strongest rejects back. Every post this returns is below the
     // bar, which is why the counter names them separately.
     let rescued = 0;
-    const floor = Math.max(0, cfg.minPerPage ?? 2);
+    let repeated = 0;
     let survivors = judged - dropped;
-    if (survivors < floor && cut.length) {
+    // Keep-alive off means "accept the occasional thin page". It cannot mean
+    // accept an empty one: a page with no posts is shorter than the viewport,
+    // so there is no scroll gesture to make, X is never asked for more, and the
+    // feed is over until you reload by hand. That is not a preference anyone
+    // expressed. One post is the difference between a thin feed and no feed.
+    const floor = survivors === 0
+      ? Math.max(1, cfg.minPerPage ?? 2)
+      : Math.max(0, cfg.minPerPage ?? 2);
+    // Below-bar rejects first. Repeats are reached for only when there are no
+    // rejects AND the page would otherwise render nothing at all — every post
+    // on it was one you had already read. A thin page still scrolls, and a
+    // repeat put back into one is just the bug again.
+    let pool = cut;
+    if (!pool.length && survivors === 0) pool = repeats;
+    if (survivors < floor && pool.length) {
       // Insert ahead of the Bottom cursor: the indices recorded during removal
       // are stale the moment anything else is spliced.
       const at = bottom ? entries.indexOf(bottom) : entries.length;
-      const picks = cut
+      const picks = pool
         .filter((c) => c.views > 0)
         .sort((a, b) => b.views - a.views)
         .slice(0, floor - survivors);
@@ -336,13 +427,15 @@
         entries.splice(at < 0 ? entries.length : at, 0, p.entry);
         rescued++;
       }
+      if (pool === repeats) { repeated = rescued; reseen -= rescued; }
     }
 
     log(
       opName,
       `${before} entries -> ${entries.length}`,
       `| judged ${judged}, kept ${survivors}, dropped ${dropped - rescued},`,
-      `topped up ${toppedUp}, filler ${rescued}, already seen ${reseen}`
+      `topped up ${toppedUp}, filler ${rescued - repeated},`,
+      `already read ${reseen}, repeats put back ${repeated}`
     );
 
     try {
@@ -354,11 +447,11 @@
             // Rescues are below the bar, so they are never counted as kept.
             kept: survivors,
             dropped: dropped - rescued,
-            rescued,
+            rescued: rescued - repeated,
+            repeated,
             toppedUp,
             reseen,
             records,
-            delivered: entries.filter((e) => !isCursor(e)).map((e) => e.entryId),
           }),
         })
       );
@@ -417,6 +510,14 @@
 
   proto.open = function (method, url, ...rest) {
     let target = url;
+    // XHR objects get reused, and stale caches would serve the previous
+    // response. This has to happen before the inflation branch below returns:
+    // inflation is on by default and rewrites every filtered request, so
+    // resetting after it meant never resetting at all.
+    this.__xlfCached = undefined;
+    this.__xlfRaw = undefined;
+    this.__xlfJsonDone = false;
+    this.__xlfInflated = false;
     try {
       this.__xlfUrl = new URL(String(url), location.origin).toString();
       this.__xlfOp = opOf(this.__xlfUrl);
@@ -436,17 +537,16 @@
     } catch {
       this.__xlfOp = null;
     }
-    if (target !== url) return origOpen.call(this, method, target, ...rest);
-    // XHR objects get reused. Stale caches would serve the previous response.
-    this.__xlfCached = undefined;
-    this.__xlfRaw = undefined;
-    this.__xlfJsonDone = false;
-    return origOpen.call(this, method, url, ...rest);
+    return origOpen.call(this, method, target === url ? url : target, ...rest);
   };
 
-  // X signs each request, and the signature covers method and path but not the
-  // query string — verified live, replaying these headers against a cursor URL
-  // returns 200 with a further cursor.
+  // Captured so the rescue can replay them. Measured 2026-08-21: this no longer
+  // buys a second request. X now requires x-client-transaction-id and treats it
+  // as single-use — the exact captured URL returns 200 once and 404 on every
+  // replay after that, and omitting the header is a 404 outright. The rescue is
+  // kept because it fails open and X's requirements move, but it now stands
+  // itself down after one failure rather than blocking the main thread on a
+  // synchronous request that cannot succeed.
   proto.setRequestHeader = function (name, value) {
     try { if (this.__xlfHeaders) this.__xlfHeaders[name] = value; } catch { /* ignore */ }
     return origSetHeader.call(this, name, value);
