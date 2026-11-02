@@ -10,11 +10,11 @@
 const HTML = document.documentElement;
 
 // Fallbacks for a key that has never been written to storage. This list has to
-// agree with XLF.DEFAULTS key for key, and test/defaults.test.js fails if it
-// does not — a key present there and missing here reads as undefined, which is
-// falsy, which silently turns its feature off. That is exactly how hiding
-// repeats came to be dead code: the default lived in scoring.js, this file
-// cannot import scoring.js, and nothing ever wrote the key.
+// agree with XLF.DEFAULTS key for key, and the defaults test in test/run.js
+// fails if it does not — a key present there and missing here reads as
+// undefined, which is falsy, which silently turns its feature off. That is
+// exactly how hiding repeats came to be dead code: the default lived in
+// scoring.js, this file cannot import scoring.js, and nothing ever wrote the key.
 const LOCAL = {
   enabled: true, unlockUntil: 0, minViews: 50000, minLikeRate: 0,
   minBookmarkRate: 0, maxFollowers: 0, requireLaunch: true, hideAds: true,

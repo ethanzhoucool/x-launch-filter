@@ -247,10 +247,9 @@
   // the case that would otherwise dead-end the feed permanently.
   // A page that keeps nothing is not merely thin, it is dead: there is nothing
   // to render, so the document is no taller than the viewport, so there is no
-  // scroll gesture available and X will never be asked again. Blocking briefly
-  // to go find posts is strictly better than a feed that has stopped. So the
-  // empty case rescues itself unconditionally, and the setting only governs the
-  // thin-but-alive case, where the user can still scroll their way out.
+  // scroll gesture available and X will never be asked again. That once made
+  // the empty case unconditional; it is opt-in now, with the thin case, for
+  // the reason given in filterPayload(): X rejects the replayed request.
   const TOPUP_PAGES_EMPTY = 3;
   const TOPUP_PAGES_THIN = 2;
 

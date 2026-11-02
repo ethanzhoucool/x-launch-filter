@@ -90,11 +90,12 @@
         <label class="check">
           <input type="checkbox" id="topUp" />
           <span>
-            Rescue a thin feed too
-            <em>A page that keeps nothing already rescues itself, because it
-            cannot be scrolled and X would never be asked again. This extends
-            that to pages that keep only one post, which you could still scroll
-            your way out of. Costs a brief freeze on those pages.</em>
+            Rescue a starved feed
+            <em>When a page keeps nothing, or only one post, fetch the next
+            page right away and add what passes. Costs a brief freeze each
+            time. X now rejects these replayed requests, so this usually buys
+            nothing; it switches itself off for the session after one
+            failure.</em>
           </span>
         </label>
         <label class="check">
