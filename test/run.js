@@ -463,5 +463,82 @@ test("a hand-written query is left exactly alone", () => {
   assert.strictEqual(q, "my own query");
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+/* ---------- the pause lease ---------- */
+
+// The service worker against a chrome.* that keeps alarms, storage and the
+// badge where a test can read them. Listeners are captured so a test can play
+// the browser: fire onInstalled after a reload, onStartup after a restart.
+function backgroundWorld(storage) {
+  const alarms = new Map();
+  const on = {};
+  const listen = (name) => ({ addListener: (fn) => { on[name] = fn; } });
+  const badge = { text: null };
+  const chrome = {
+    runtime: { onInstalled: listen("installed"), onStartup: listen("startup"),
+               onMessage: listen("message"), openOptionsPage() {} },
+    alarms: {
+      onAlarm: listen("alarm"),
+      create: (name, info) => { alarms.set(name, { name, ...info }); },
+      clear: async (name) => alarms.delete(name),
+      get: async (name) => alarms.get(name),
+    },
+    storage: {
+      onChanged: listen("changed"),
+      local: {
+        get: async (keys) => Object.fromEntries(Object.keys(keys).map((k) =>
+          [k, k in storage ? storage[k] : keys[k]])),
+        set: async (obj) => { Object.assign(storage, obj); },
+      },
+    },
+    action: { setBadgeText: ({ text }) => { badge.text = text; }, setBadgeBackgroundColor() {} },
+  };
+  const ctx = vm.createContext({ console, chrome, Date, Math, Object, String });
+  vm.runInContext(read("src/background.js"), ctx, { filename: "background.js" });
+  return { alarms, on, badge, storage };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+async function asyncTest(name, fn) {
+  try { await fn(); passed++; console.log("  ok   " + name); }
+  catch (e) { failed++; console.log("  FAIL " + name + "\n       " + e.message); }
+}
+
+// The worker is all promises, so this section runs last and the summary waits
+// for it.
+(async () => {
+  console.log("\npause");
+
+  await asyncTest("a pause survives the extension being reloaded under it", async () => {
+    // Reloading or updating the extension wipes its alarms; storage keeps the
+    // lease. Without re-arming, nothing would ever relock or tick the badge.
+    const until = Date.now() + 10 * 60000;
+    const bg = backgroundWorld({ unlockUntil: until });
+    await bg.on.installed({ reason: "update" });
+    await settle();
+    assert.strictEqual(bg.alarms.get("xlf-relock")?.when, until, "no relock alarm");
+    assert.ok(bg.alarms.has("xlf-tick"), "no badge tick");
+    assert.strictEqual(bg.badge.text, "10");
+  });
+
+  await asyncTest("a pause that ended while Chrome was closed is closed on startup", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 60000 });
+    await bg.on.startup();
+    await settle();
+    assert.strictEqual(bg.storage.unlockUntil, 0, "the stale lease was left in place");
+    assert.strictEqual(bg.badge.text, "", "the badge still claims a pause");
+    assert.strictEqual(bg.alarms.size, 0);
+  });
+
+  await asyncTest("a tick after the lease ran out stops ticking", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 1000 });
+    bg.alarms.set("xlf-tick", { name: "xlf-tick", periodInMinutes: 1 });
+    await bg.on.alarm({ name: "xlf-tick" });
+    await settle();
+    assert.ok(!bg.alarms.has("xlf-tick"), "a tick that outlived its pause runs forever");
+    assert.strictEqual(bg.badge.text, "");
+  });
+
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+})();
