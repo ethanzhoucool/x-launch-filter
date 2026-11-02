@@ -539,6 +539,25 @@ async function asyncTest(name, fn) {
     assert.strictEqual(bg.badge.text, "");
   });
 
+  await asyncTest("pausing and resuming update the badge without a storage listener", async () => {
+    // Nothing in the worker listens to storage, so that a tab saving its
+    // ledger does not start it. Each path that changes the lease has to
+    // refresh the badge on its own.
+    const bg = backgroundWorld({});
+    assert.strictEqual(bg.on.changed, undefined,
+      "a storage listener wakes the worker on every ledger write from every tab");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "15");
+    await new Promise((done) => bg.on.message({ type: "relock" }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await bg.on.alarm({ name: "xlf-relock" });
+    await settle();
+    assert.strictEqual(bg.badge.text, "", "the lease ran out and the badge did not notice");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 })();

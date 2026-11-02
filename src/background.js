@@ -51,9 +51,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === TICK_ALARM) await syncLease();
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && ("unlockUntil" in changes || "enabled" in changes)) refresh();
-});
+// Deliberately no storage.onChanged listener. Every write of unlockUntil or
+// enabled happens in this file and refreshes the badge itself, while x.com
+// tabs write their ledgers to storage every few seconds as you scroll; a
+// listener here turned each of those writes into an event that started this
+// worker, or kept it from ever going idle, only to ignore it.
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   if (msg?.type === "unlock") {
