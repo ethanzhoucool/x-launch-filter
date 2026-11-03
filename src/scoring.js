@@ -1,11 +1,14 @@
 // Decides whether one post survives the filter.
 //
-// Loaded into BOTH worlds: the isolated content script (for the HUD and the
-// Explore gate) and the MAIN-world interceptor (which judges posts straight off
-// the API response, before X's renderer ever sees them). So this file must stay
-// free of chrome.* and of anything DOM-only.
+// Loaded into the MAIN-world interceptor, which judges posts straight off the
+// API response before X's renderer ever sees them, and into the popup and
+// settings pages; the settings page reads its defaults and keyword lists. Not
+// into the isolated content script: Chrome injects a file into one world only,
+// which is why content.js keeps its own copies of DEFAULTS and rejudge(). So
+// this file must stay free of chrome.* and of anything DOM-only.
 //
-// Both paths normalise into the same record shape and call judge().
+// fromApi() normalises an API post into the shape judge() reads. fromArticle()
+// does the same for a rendered post, though nothing calls it at present.
 
 self.XLF = (() => {
   const DEFAULTS = {
@@ -24,13 +27,13 @@ self.XLF = (() => {
     // whether the thing itself is interesting.
     maxFollowers: 0,
     // Last-resort filler. A page filtered to nothing stops X paginating, so
-    // this many below-bar posts go back in rather than let the feed die. The
-    // read-ahead bank in intercept.js exists to make it unnecessary; 0 turns it
-    // off and accepts the occasional dead end.
+    // this many below-bar posts go back in rather than let the feed die. 0
+    // turns it off and accepts the occasional thin page; an empty one still
+    // gets one post back, because that is a dead end rather than a thin page.
     minPerPage: 2,
-    // Synchronously pull another page when one filters down to nothing, which
-    // is the only state X cannot recover from on its own. Blocks the main
-    // thread for the length of one request, so it is opt-in.
+    // Synchronously pull another page when one filters down to nothing or to
+    // a single post. Blocks the main thread for the length of each request,
+    // and X now rejects replayed requests, so it is opt-in.
     topUp: false,
     // Posts to request per page. X defaults to 20; asking for more is the
     // cheapest defence against a strict bar starving the feed. 0 leaves it be.

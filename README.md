@@ -369,7 +369,8 @@ Verified against a live `HomeTimeline` response:
 - Entry ids are prefixed `cursor-`, `tweet-` and `home-conversation-`.
 - A single post sits at `content.itemContent.tweet_results.result`; a
   conversation module carries `content.items[].item.itemContent.tweet_results.result`
-  and is judged by its root post, so a thread is kept or dropped whole.
+  and is kept or dropped whole: kept if any post in it qualifies, and retired
+  on its root post, the one you actually read.
 - `views.count` is a string; likes and bookmarks are `legacy.favorite_count` and
   `legacy.bookmark_count`. Long posts truncate `full_text`, so `note_tweet`
   carries the real text.
@@ -483,14 +484,11 @@ reload by hand. Nobody expressed that preference. One post is the difference
 between a thin feed and no feed, and it costs nothing on the network.
 
 So the anti-starvation story rests on the rotation and the filler rather than on
-fetching ahead. That case
-is unconditional, because a page with no posts is not merely thin: the document
-is no taller than the viewport, so there is no scroll gesture available and X
-will never be asked again. Blocking briefly beats a feed that has stopped. The
-response getter is synchronous so the fetch is a synchronous XHR, capped at
-three extra pages, failing open on any error, and it only ever advances X's
-cursor to a page it actually consumed. Extending the same rescue to thin-but-
-scrollable pages is opt-in, since you can scroll your way out of those.
+fetching ahead. With the rescue switched on, it covers both an empty page and a
+thin one (fewer than two posts kept). The response getter is synchronous, so the
+fetch is a synchronous XHR, capped at three extra pages for an empty page and
+two for a thin one, failing open on any error, and it only ever advances X's
+cursor to a page it actually consumed.
 
 The cheaper fix is yield: at a 25k floor with an under-50k follower ceiling this
 feed kept 22 of 300, and dropping the ceiling alone took it to 74. Above roughly
@@ -528,7 +526,7 @@ posts you never read, which is the worse failure.
 node test/run.js
 ```
 
-Thirteen of them, and they run in Node with no browser and no dependencies.
+They run in Node with no browser and no dependencies.
 `test/harness.js` builds enough of x.com to load both halves of the extension
 into separate `vm` contexts that share one document and one `localStorage` —
 which is how Chrome arranges them, and where every bug in the repeat feature
@@ -546,8 +544,8 @@ code for its entire life.
 
 ## Testing the classifier without a browser
 
-The classifier hangs off `self.XLF` in `src/scoring.js`, is shared by both the
-API and DOM paths, and has no dependency on `chrome.*` or on a real DOM:
+The classifier hangs off `self.XLF` in `src/scoring.js` and has no dependency on
+`chrome.*` or on a real DOM:
 
 ```js
 global.self = global;
@@ -583,7 +581,7 @@ src/content.js       isolated world: config bridge, pill, panel, ledgers, gate
 src/filter.css       the counter and the Explore gate
 src/background.js    lock state, relock alarm, badge
 popup/               status, launch searches, pause
-options/             view floor, engagement rates, keywords, the read ledger
+options/             keywords, where it runs, the search query, the read ledger
 test/                a fake x.com, both worlds, no dependencies
 icons/make_icons.py  regenerates the PNGs, no dependencies
 ```
