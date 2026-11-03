@@ -41,19 +41,21 @@ const TICK_ALARM = "xlf-tick";
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(DEFAULTS);
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
-  refresh();
+  await syncLease();
 });
 
-chrome.runtime.onStartup.addListener(refresh);
+chrome.runtime.onStartup.addListener(syncLease);
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === RELOCK_ALARM) await relock();
-  if (alarm.name === TICK_ALARM) refresh();
+  if (alarm.name === TICK_ALARM) await syncLease();
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && ("unlockUntil" in changes || "enabled" in changes)) refresh();
-});
+// Deliberately no storage.onChanged listener. Every write of unlockUntil or
+// enabled happens in this file and refreshes the badge itself, while x.com
+// tabs write their ledgers to storage every few seconds as you scroll; a
+// listener here turned each of those writes into an event that started this
+// worker, or kept it from ever going idle, only to ignore it.
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   if (msg?.type === "unlock") {
@@ -79,6 +81,28 @@ async function unlock(minutes) {
   chrome.alarms.create(RELOCK_ALARM, { when: until });
   chrome.alarms.create(TICK_ALARM, { periodInMinutes: 1 });
   refresh();
+}
+
+// Alarms do not survive reloading or updating the extension, and Chrome may
+// drop them across a browser restart. A pause that outlives its alarms still
+// ends on time, because every gate compares unlockUntil with the clock itself,
+// but nothing clears it or ticks the badge any more: the badge freezes on the
+// minute it last showed and goes on claiming a pause after filtering resumed.
+// So the lease is re-armed from storage on install, update and browser start,
+// and re-checked on every tick, and a lease found already over is closed.
+async function syncLease() {
+  const { unlockUntil = 0 } = await chrome.storage.local.get({ unlockUntil: 0 });
+  if (unlockUntil > Date.now()) {
+    if (!(await chrome.alarms.get(RELOCK_ALARM))) {
+      chrome.alarms.create(RELOCK_ALARM, { when: unlockUntil });
+    }
+    if (!(await chrome.alarms.get(TICK_ALARM))) {
+      chrome.alarms.create(TICK_ALARM, { periodInMinutes: 1 });
+    }
+    return refresh();
+  }
+  if (unlockUntil) return relock();
+  return refresh();
 }
 
 async function relock() {

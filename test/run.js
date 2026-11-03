@@ -113,6 +113,76 @@ test("scoring, background and content agree on every shared key", () => {
   }
 });
 
+/* ---------- what the keyword lists match ---------- */
+
+console.log("\nkeywords");
+
+function scoringWorld() {
+  const s = vm.createContext({ console });
+  s.self = s;
+  vm.runInContext(read("src/scoring.js"), s);
+  return s.XLF;
+}
+
+const XLF = scoringWorld();
+const matched = (re, text) => {
+  const m = re && re.exec(text);
+  return m ? m[0] : null;
+};
+
+test("a phrase does not fire inside another word", () => {
+  const cfg = XLF.buildConfig({});
+  // Each of these used to match as a substring: "start if" holds "rt if",
+  // "relationship itself" holds "ship it", and so on.
+  for (const text of ["Start if you are curious", "Unlike if you use the old one"]) {
+    assert.strictEqual(matched(cfg.excludeRe, text), null, `muted: ${text}`);
+  }
+  for (const text of [
+    "The relationship itself matters", "TV series and films I love",
+    "The industry itself is changing", "Snow in the forecast",
+    "A new approach to cooking", "Watch this live stream",
+  ]) {
+    assert.strictEqual(matched(cfg.includeRe, text), null, `launch signal in: ${text}`);
+  }
+});
+
+test("a term still matches its plural, a hyphen and a curly apostrophe", () => {
+  const cfg = XLF.buildConfig({});
+  for (const text of ["NFTs are back", "Democrats push the bill", "missiles overnight",
+    "a left-wing take"]) {
+    assert.ok(matched(cfg.excludeRe, text), `not muted: ${text}`);
+  }
+  for (const text of ["new features in the editor", "two side projects", "open-source editor",
+    "open-sourced today", "it’s called Orbit", "Series A, closed", "Orbit is live",
+    "now in beta", "sign-up is open"]) {
+    assert.ok(matched(cfg.includeRe, text), `no launch signal in: ${text}`);
+  }
+  assert.strictEqual(matched(cfg.includeRe, "v10 of the app"), null, "v1 matched v10");
+  assert.ok(matched(cfg.includeRe, "v1 is out"));
+});
+
+test("your own terms follow the same rules", () => {
+  const cfg = XLF.buildConfig({ extraInclude: "figma plugin", extraExclude: "hiring" });
+  assert.ok(matched(cfg.includeRe, "three Figma plugins I made"));
+  assert.ok(matched(cfg.includeRe, "my figma-plugin"));
+  assert.strictEqual(matched(cfg.excludeRe, "rehiring the team"), null);
+  const dash = XLF.buildConfig({ extraInclude: "-dash" });
+  assert.ok(matched(dash.includeRe, "the re-dash build"));
+  assert.ok(matched(cfg.excludeRe, "We're hiring"));
+});
+
+test("a launch is no longer muted by engagement bait it does not contain", () => {
+  const cfg = XLF.buildConfig({});
+  const v = XLF.judge(XLF.fromApi({
+    __typename: "Tweet",
+    rest_id: "1",
+    views: { count: "120000" },
+    legacy: { full_text: "Start if you want: introducing Orbit, a new editor",
+              favorite_count: 900, bookmark_count: 40 },
+  }), cfg);
+  assert.strictEqual(v.reason, "keep", "dropped as " + v.reason);
+});
+
 /* ---------- suppression ---------- */
 
 console.log("\nrepeats");
@@ -618,5 +688,101 @@ test("a hand-written query is left exactly alone", () => {
   assert.strictEqual(q, "my own query");
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+/* ---------- the pause lease ---------- */
+
+// The service worker against a chrome.* that keeps alarms, storage and the
+// badge where a test can read them. Listeners are captured so a test can play
+// the browser: fire onInstalled after a reload, onStartup after a restart.
+function backgroundWorld(storage) {
+  const alarms = new Map();
+  const on = {};
+  const listen = (name) => ({ addListener: (fn) => { on[name] = fn; } });
+  const badge = { text: null };
+  const chrome = {
+    runtime: { onInstalled: listen("installed"), onStartup: listen("startup"),
+               onMessage: listen("message"), openOptionsPage() {} },
+    alarms: {
+      onAlarm: listen("alarm"),
+      create: (name, info) => { alarms.set(name, { name, ...info }); },
+      clear: async (name) => alarms.delete(name),
+      get: async (name) => alarms.get(name),
+    },
+    storage: {
+      onChanged: listen("changed"),
+      local: {
+        get: async (keys) => Object.fromEntries(Object.keys(keys).map((k) =>
+          [k, k in storage ? storage[k] : keys[k]])),
+        set: async (obj) => { Object.assign(storage, obj); },
+      },
+    },
+    action: { setBadgeText: ({ text }) => { badge.text = text; }, setBadgeBackgroundColor() {} },
+  };
+  const ctx = vm.createContext({ console, chrome, Date, Math, Object, String });
+  vm.runInContext(read("src/background.js"), ctx, { filename: "background.js" });
+  return { alarms, on, badge, storage };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+async function asyncTest(name, fn) {
+  try { await fn(); passed++; console.log("  ok   " + name); }
+  catch (e) { failed++; console.log("  FAIL " + name + "\n       " + e.message); }
+}
+
+// The worker is all promises, so this section runs last and the summary waits
+// for it.
+(async () => {
+  console.log("\npause");
+
+  await asyncTest("a pause survives the extension being reloaded under it", async () => {
+    // Reloading or updating the extension wipes its alarms; storage keeps the
+    // lease. Without re-arming, nothing would ever relock or tick the badge.
+    const until = Date.now() + 10 * 60000;
+    const bg = backgroundWorld({ unlockUntil: until });
+    await bg.on.installed({ reason: "update" });
+    await settle();
+    assert.strictEqual(bg.alarms.get("xlf-relock")?.when, until, "no relock alarm");
+    assert.ok(bg.alarms.has("xlf-tick"), "no badge tick");
+    assert.strictEqual(bg.badge.text, "10");
+  });
+
+  await asyncTest("a pause that ended while Chrome was closed is closed on startup", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 60000 });
+    await bg.on.startup();
+    await settle();
+    assert.strictEqual(bg.storage.unlockUntil, 0, "the stale lease was left in place");
+    assert.strictEqual(bg.badge.text, "", "the badge still claims a pause");
+    assert.strictEqual(bg.alarms.size, 0);
+  });
+
+  await asyncTest("a tick after the lease ran out stops ticking", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 1000 });
+    bg.alarms.set("xlf-tick", { name: "xlf-tick", periodInMinutes: 1 });
+    await bg.on.alarm({ name: "xlf-tick" });
+    await settle();
+    assert.ok(!bg.alarms.has("xlf-tick"), "a tick that outlived its pause runs forever");
+    assert.strictEqual(bg.badge.text, "");
+  });
+
+  await asyncTest("pausing and resuming update the badge without a storage listener", async () => {
+    // Nothing in the worker listens to storage, so that a tab saving its
+    // ledger does not start it. Each path that changes the lease has to
+    // refresh the badge on its own.
+    const bg = backgroundWorld({});
+    assert.strictEqual(bg.on.changed, undefined,
+      "a storage listener wakes the worker on every ledger write from every tab");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "15");
+    await new Promise((done) => bg.on.message({ type: "relock" }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await bg.on.alarm({ name: "xlf-relock" });
+    await settle();
+    assert.strictEqual(bg.badge.text, "", "the lease ran out and the badge did not notice");
+  });
+
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+})();
