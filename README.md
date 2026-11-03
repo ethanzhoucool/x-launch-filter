@@ -98,6 +98,12 @@ product. A video with nothing else does not.
 Both keyword lists are editable in the settings page, and your terms are added
 to the built-ins rather than replacing them.
 
+Every term, built-in or yours, matches whole words: `rt if` does not fire on
+"start if", and `series a` does not fire on "series and". The last word may be
+plural (`side project` matches "side projects", `nft` matches "NFTs"), a space
+also matches a hyphen (`left wing` matches "left-wing"), and an apostrophe
+matches the curly one phones type.
+
 ### Picking thresholds
 
 Measured across one live page of a real home timeline (81 posts):

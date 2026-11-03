@@ -113,6 +113,76 @@ test("scoring, background and content agree on every shared key", () => {
   }
 });
 
+/* ---------- what the keyword lists match ---------- */
+
+console.log("\nkeywords");
+
+function scoringWorld() {
+  const s = vm.createContext({ console });
+  s.self = s;
+  vm.runInContext(read("src/scoring.js"), s);
+  return s.XLF;
+}
+
+const XLF = scoringWorld();
+const matched = (re, text) => {
+  const m = re && re.exec(text);
+  return m ? m[0] : null;
+};
+
+test("a phrase does not fire inside another word", () => {
+  const cfg = XLF.buildConfig({});
+  // Each of these used to match as a substring: "start if" holds "rt if",
+  // "relationship itself" holds "ship it", and so on.
+  for (const text of ["Start if you are curious", "Unlike if you use the old one"]) {
+    assert.strictEqual(matched(cfg.excludeRe, text), null, `muted: ${text}`);
+  }
+  for (const text of [
+    "The relationship itself matters", "TV series and films I love",
+    "The industry itself is changing", "Snow in the forecast",
+    "A new approach to cooking", "Watch this live stream",
+  ]) {
+    assert.strictEqual(matched(cfg.includeRe, text), null, `launch signal in: ${text}`);
+  }
+});
+
+test("a term still matches its plural, a hyphen and a curly apostrophe", () => {
+  const cfg = XLF.buildConfig({});
+  for (const text of ["NFTs are back", "Democrats push the bill", "missiles overnight",
+    "a left-wing take"]) {
+    assert.ok(matched(cfg.excludeRe, text), `not muted: ${text}`);
+  }
+  for (const text of ["new features in the editor", "two side projects", "open-source editor",
+    "open-sourced today", "it’s called Orbit", "Series A, closed", "Orbit is live",
+    "now in beta", "sign-up is open"]) {
+    assert.ok(matched(cfg.includeRe, text), `no launch signal in: ${text}`);
+  }
+  assert.strictEqual(matched(cfg.includeRe, "v10 of the app"), null, "v1 matched v10");
+  assert.ok(matched(cfg.includeRe, "v1 is out"));
+});
+
+test("your own terms follow the same rules", () => {
+  const cfg = XLF.buildConfig({ extraInclude: "figma plugin", extraExclude: "hiring" });
+  assert.ok(matched(cfg.includeRe, "three Figma plugins I made"));
+  assert.ok(matched(cfg.includeRe, "my figma-plugin"));
+  assert.strictEqual(matched(cfg.excludeRe, "rehiring the team"), null);
+  const dash = XLF.buildConfig({ extraInclude: "-dash" });
+  assert.ok(matched(dash.includeRe, "the re-dash build"));
+  assert.ok(matched(cfg.excludeRe, "We're hiring"));
+});
+
+test("a launch is no longer muted by engagement bait it does not contain", () => {
+  const cfg = XLF.buildConfig({});
+  const v = XLF.judge(XLF.fromApi({
+    __typename: "Tweet",
+    rest_id: "1",
+    views: { count: "120000" },
+    legacy: { full_text: "Start if you want: introducing Orbit, a new editor",
+              favorite_count: 900, bookmark_count: 40 },
+  }), cfg);
+  assert.strictEqual(v.reason, "keep", "dropped as " + v.reason);
+});
+
 /* ---------- suppression ---------- */
 
 console.log("\nrepeats");
@@ -418,6 +488,161 @@ test("a clear from the settings page reaches a tab that was not open", () => {
   assert.strictEqual(page.store["xlf.hidden"], "");
 });
 
+/* ---------- the verdict, and its two re-scoring copies ---------- */
+
+console.log("\nverdicts");
+
+const scoring = (() => {
+  const s = vm.createContext({ console });
+  s.self = s;
+  vm.runInContext(read("src/scoring.js"), s);
+  return s.XLF;
+})();
+
+// A post as the API sends it, from a handful of knobs.
+function apiPost(o) {
+  const media = o.media ? [{ type: o.media }] : [];
+  const tweet = {
+    __typename: "Tweet",
+    rest_id: String(o.id),
+    views: { count: String(o.views) },
+    core: o.followers == null ? undefined
+      : { user_results: { result: { legacy: { followers_count: o.followers } } } },
+    card: o.card ? { legacy: { binding_values: [
+      { key: "title", value: { string_value: "A link card" } },
+    ] } } : undefined,
+    legacy: {
+      full_text: o.text,
+      favorite_count: o.likes,
+      bookmark_count: o.bookmarks,
+      extended_entities: { media },
+      in_reply_to_status_id_str: o.reply ? "1" : undefined,
+    },
+  };
+  if (!o.repost) return tweet;
+  return { __typename: "Tweet", rest_id: "9" + o.id,
+    legacy: { full_text: "RT @someone: …", favorite_count: 0, bookmark_count: 0,
+              retweeted_status_result: { result: tweet } } };
+}
+
+// Every combination of the signals the gates read, against every bar the
+// panel can set. Big enough that any gate missing from one copy shows up.
+function grid() {
+  const posts = [];
+  let id = 0;
+  for (const views of [0, 20000, 60000, 2000000])
+    for (const text of ["Introducing Orbit", "election night thoughts", "nice weather today"])
+      for (const media of [null, "video", "photo"])
+        for (const card of [false, true])
+          for (const flag of [null, "reply", "repost", "ad"])
+            for (const followers of [null, 5000, 500000])
+              for (const [likeRate, bookmarkRate] of [[0.003, 0.0002], [0.02, 0.003]]) {
+                posts.push({ id: ++id, views, text, media, card, followers,
+                  likes: Math.round(views * likeRate), bookmarks: Math.round(views * bookmarkRate),
+                  reply: flag === "reply", repost: flag === "repost", ad: flag === "ad" });
+              }
+  return posts;
+}
+
+const BARS = [
+  {}, { minViews: 0 }, { minViews: 1000000 }, { minLikeRate: 1 }, { minLikeRate: 0.5 },
+  { minBookmarkRate: 0.1 }, { maxFollowers: 10000 }, { requireLaunch: false },
+  { hideReposts: true }, { hideReplies: false }, { hideAds: false },
+  { minViews: 10000, maxFollowers: 10000, minLikeRate: 0.25, requireLaunch: false },
+  // Every gate at once, so a post failing several shows which one comes first.
+  { minViews: 10000, maxFollowers: 10000, minLikeRate: 1, minBookmarkRate: 0.1,
+    hideReposts: true },
+];
+
+// judge() and rejudge() name their reasons differently: one is a log line, the
+// other a bar label. The order they are reached in is what has to match.
+const SAME_REASON = {
+  ad: "ads", repost: "reposts", reply: "replies", noise: "muted topics",
+  "low views": "views", "low like rate": "like rate", "low bookmark rate": "bookmark rate",
+  "too many followers": "account size", "off-topic": "no launch signal", keep: "keep",
+};
+
+test("re-scoring a stored record reaches the verdict judging the post did", () => {
+  // The panel's forecast never sees a post, only the record of one, so a gate
+  // that judge() has and rejudge() lacks would make the panel promise posts
+  // the next reload does not deliver.
+  let n = 0;
+  for (const bar of BARS) {
+    const cfg = scoring.buildConfig(bar);
+    for (const o of grid()) {
+      const p = scoring.fromApi(apiPost(o), { promoted: o.ad });
+      const live = scoring.judge(p, cfg);
+      const again = scoring.rejudge(scoring.record(p, cfg), cfg);
+      assert.strictEqual(again.reason, SAME_REASON[live.reason],
+        `${JSON.stringify(bar)} on ${JSON.stringify(o)}: judge said ${live.reason}, ` +
+        `rejudge said ${again.reason}`);
+      n++;
+    }
+  }
+  assert.ok(n > 10000, "the grid is too small to mean anything");
+});
+
+test("content.js's copy of rejudge() agrees with scoring.js's", () => {
+  // content.js cannot load scoring.js (Chrome injects a file into one world
+  // only), so its rejudge() is a hand copy, with the same failure mode as the
+  // hand-copied defaults above.
+  const page = makePage({ pathname: "/home" });
+  const copy = vm.runInContext("rejudge", loadIsolated(page));
+  for (const bar of BARS) {
+    const cfg = scoring.buildConfig(bar);
+    for (const o of grid()) {
+      const r = scoring.record(scoring.fromApi(apiPost(o), { promoted: o.ad }), cfg);
+      const want = scoring.rejudge(r, cfg);
+      const got = copy(r, cfg);
+      assert.strictEqual(got.reason, want.reason,
+        `${JSON.stringify(bar)} on ${JSON.stringify(r)}: content.js said ${got.reason}`);
+    }
+  }
+});
+
+test("a repost is judged on the post it shares", () => {
+  const cfg = scoring.buildConfig({});
+  const p = scoring.fromApi(apiPost({ id: 5, views: 300000, text: "Introducing Orbit",
+    likes: 2400, bookmarks: 150, media: "video", repost: true }));
+  assert.strictEqual(p.id, "5", "the ledger would key the wrapper, not the post");
+  assert.strictEqual(p.views, 300000);
+  assert.ok(p.isRepost);
+  assert.strictEqual(scoring.judge(p, cfg).reason, "keep");
+  assert.strictEqual(scoring.judge(p, scoring.buildConfig({ hideReposts: true })).reason, "repost");
+});
+
+test("a long post is judged on its whole text, and a card on its title", () => {
+  const cfg = scoring.buildConfig({});
+  const long = apiPost({ id: 6, views: 90000, text: "A thread about my week…", likes: 0, bookmarks: 0 });
+  long.note_tweet = { note_tweet_results: { result: {
+    text: "A thread about my week. Then at the very end: introducing Orbit." } } };
+  assert.strictEqual(scoring.judge(scoring.fromApi(long), cfg).reason, "keep");
+
+  const card = apiPost({ id: 7, views: 90000, text: "look", likes: 0, bookmarks: 0, card: true });
+  card.card.legacy.binding_values[0].value.string_value = "Orbit is now available";
+  assert.strictEqual(scoring.judge(scoring.fromApi(card), cfg).reason, "keep");
+});
+
+test("an author whose follower count cannot be read is never dropped by the ceiling", () => {
+  const cfg = scoring.buildConfig({ maxFollowers: 1000 });
+  const unknown = scoring.fromApi(apiPost({ id: 8, views: 90000, text: "Introducing Orbit",
+    likes: 0, bookmarks: 0, followers: null }));
+  assert.strictEqual(unknown.followers, null);
+  assert.strictEqual(scoring.judge(unknown, cfg).reason, "keep");
+  const big = scoring.fromApi(apiPost({ id: 9, views: 90000, text: "Introducing Orbit",
+    likes: 0, bookmarks: 0, followers: 5000 }));
+  assert.strictEqual(scoring.judge(big, cfg).reason, "too many followers");
+});
+
+test("a post wrapped for visibility is unwrapped before it is judged", () => {
+  const inner = apiPost({ id: 10, views: 90000, text: "Introducing Orbit", likes: 0, bookmarks: 0 });
+  const p = scoring.fromApi({ __typename: "TweetWithVisibilityResults", tweet: inner });
+  assert.strictEqual(p.id, "10");
+  assert.strictEqual(p.views, 90000);
+  assert.strictEqual(scoring.fromApi({ __typename: "TweetTombstone" }), null,
+    "a tombstone has nothing to judge");
+});
+
 /* ---------- variety ---------- */
 
 console.log("\nrotation");
@@ -463,5 +688,101 @@ test("a hand-written query is left exactly alone", () => {
   assert.strictEqual(q, "my own query");
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+/* ---------- the pause lease ---------- */
+
+// The service worker against a chrome.* that keeps alarms, storage and the
+// badge where a test can read them. Listeners are captured so a test can play
+// the browser: fire onInstalled after a reload, onStartup after a restart.
+function backgroundWorld(storage) {
+  const alarms = new Map();
+  const on = {};
+  const listen = (name) => ({ addListener: (fn) => { on[name] = fn; } });
+  const badge = { text: null };
+  const chrome = {
+    runtime: { onInstalled: listen("installed"), onStartup: listen("startup"),
+               onMessage: listen("message"), openOptionsPage() {} },
+    alarms: {
+      onAlarm: listen("alarm"),
+      create: (name, info) => { alarms.set(name, { name, ...info }); },
+      clear: async (name) => alarms.delete(name),
+      get: async (name) => alarms.get(name),
+    },
+    storage: {
+      onChanged: listen("changed"),
+      local: {
+        get: async (keys) => Object.fromEntries(Object.keys(keys).map((k) =>
+          [k, k in storage ? storage[k] : keys[k]])),
+        set: async (obj) => { Object.assign(storage, obj); },
+      },
+    },
+    action: { setBadgeText: ({ text }) => { badge.text = text; }, setBadgeBackgroundColor() {} },
+  };
+  const ctx = vm.createContext({ console, chrome, Date, Math, Object, String });
+  vm.runInContext(read("src/background.js"), ctx, { filename: "background.js" });
+  return { alarms, on, badge, storage };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+async function asyncTest(name, fn) {
+  try { await fn(); passed++; console.log("  ok   " + name); }
+  catch (e) { failed++; console.log("  FAIL " + name + "\n       " + e.message); }
+}
+
+// The worker is all promises, so this section runs last and the summary waits
+// for it.
+(async () => {
+  console.log("\npause");
+
+  await asyncTest("a pause survives the extension being reloaded under it", async () => {
+    // Reloading or updating the extension wipes its alarms; storage keeps the
+    // lease. Without re-arming, nothing would ever relock or tick the badge.
+    const until = Date.now() + 10 * 60000;
+    const bg = backgroundWorld({ unlockUntil: until });
+    await bg.on.installed({ reason: "update" });
+    await settle();
+    assert.strictEqual(bg.alarms.get("xlf-relock")?.when, until, "no relock alarm");
+    assert.ok(bg.alarms.has("xlf-tick"), "no badge tick");
+    assert.strictEqual(bg.badge.text, "10");
+  });
+
+  await asyncTest("a pause that ended while Chrome was closed is closed on startup", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 60000 });
+    await bg.on.startup();
+    await settle();
+    assert.strictEqual(bg.storage.unlockUntil, 0, "the stale lease was left in place");
+    assert.strictEqual(bg.badge.text, "", "the badge still claims a pause");
+    assert.strictEqual(bg.alarms.size, 0);
+  });
+
+  await asyncTest("a tick after the lease ran out stops ticking", async () => {
+    const bg = backgroundWorld({ unlockUntil: Date.now() - 1000 });
+    bg.alarms.set("xlf-tick", { name: "xlf-tick", periodInMinutes: 1 });
+    await bg.on.alarm({ name: "xlf-tick" });
+    await settle();
+    assert.ok(!bg.alarms.has("xlf-tick"), "a tick that outlived its pause runs forever");
+    assert.strictEqual(bg.badge.text, "");
+  });
+
+  await asyncTest("pausing and resuming update the badge without a storage listener", async () => {
+    // Nothing in the worker listens to storage, so that a tab saving its
+    // ledger does not start it. Each path that changes the lease has to
+    // refresh the badge on its own.
+    const bg = backgroundWorld({});
+    assert.strictEqual(bg.on.changed, undefined,
+      "a storage listener wakes the worker on every ledger write from every tab");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "15");
+    await new Promise((done) => bg.on.message({ type: "relock" }, {}, done));
+    await settle();
+    assert.strictEqual(bg.badge.text, "");
+    await new Promise((done) => bg.on.message({ type: "unlock", minutes: 15 }, {}, done));
+    await bg.on.alarm({ name: "xlf-relock" });
+    await settle();
+    assert.strictEqual(bg.badge.text, "", "the lease ran out and the badge did not notice");
+  });
+
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+})();
