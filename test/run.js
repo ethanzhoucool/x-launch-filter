@@ -113,6 +113,76 @@ test("scoring, background and content agree on every shared key", () => {
   }
 });
 
+/* ---------- what the keyword lists match ---------- */
+
+console.log("\nkeywords");
+
+function scoringWorld() {
+  const s = vm.createContext({ console });
+  s.self = s;
+  vm.runInContext(read("src/scoring.js"), s);
+  return s.XLF;
+}
+
+const XLF = scoringWorld();
+const matched = (re, text) => {
+  const m = re && re.exec(text);
+  return m ? m[0] : null;
+};
+
+test("a phrase does not fire inside another word", () => {
+  const cfg = XLF.buildConfig({});
+  // Each of these used to match as a substring: "start if" holds "rt if",
+  // "relationship itself" holds "ship it", and so on.
+  for (const text of ["Start if you are curious", "Unlike if you use the old one"]) {
+    assert.strictEqual(matched(cfg.excludeRe, text), null, `muted: ${text}`);
+  }
+  for (const text of [
+    "The relationship itself matters", "TV series and films I love",
+    "The industry itself is changing", "Snow in the forecast",
+    "A new approach to cooking", "Watch this live stream",
+  ]) {
+    assert.strictEqual(matched(cfg.includeRe, text), null, `launch signal in: ${text}`);
+  }
+});
+
+test("a term still matches its plural, a hyphen and a curly apostrophe", () => {
+  const cfg = XLF.buildConfig({});
+  for (const text of ["NFTs are back", "Democrats push the bill", "missiles overnight",
+    "a left-wing take"]) {
+    assert.ok(matched(cfg.excludeRe, text), `not muted: ${text}`);
+  }
+  for (const text of ["new features in the editor", "two side projects", "open-source editor",
+    "open-sourced today", "it’s called Orbit", "Series A, closed", "Orbit is live",
+    "now in beta", "sign-up is open"]) {
+    assert.ok(matched(cfg.includeRe, text), `no launch signal in: ${text}`);
+  }
+  assert.strictEqual(matched(cfg.includeRe, "v10 of the app"), null, "v1 matched v10");
+  assert.ok(matched(cfg.includeRe, "v1 is out"));
+});
+
+test("your own terms follow the same rules", () => {
+  const cfg = XLF.buildConfig({ extraInclude: "figma plugin", extraExclude: "hiring" });
+  assert.ok(matched(cfg.includeRe, "three Figma plugins I made"));
+  assert.ok(matched(cfg.includeRe, "my figma-plugin"));
+  assert.strictEqual(matched(cfg.excludeRe, "rehiring the team"), null);
+  const dash = XLF.buildConfig({ extraInclude: "-dash" });
+  assert.ok(matched(dash.includeRe, "the re-dash build"));
+  assert.ok(matched(cfg.excludeRe, "We're hiring"));
+});
+
+test("a launch is no longer muted by engagement bait it does not contain", () => {
+  const cfg = XLF.buildConfig({});
+  const v = XLF.judge(XLF.fromApi({
+    __typename: "Tweet",
+    rest_id: "1",
+    views: { count: "120000" },
+    legacy: { full_text: "Start if you want: introducing Orbit, a new editor",
+              favorite_count: 900, bookmark_count: 40 },
+  }), cfg);
+  assert.strictEqual(v.reason, "keep", "dropped as " + v.reason);
+});
+
 /* ---------- suppression ---------- */
 
 console.log("\nrepeats");
