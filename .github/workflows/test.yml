@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The extension ships its sources unbuilt, so a syntax error only shows
+      # up when Chrome refuses to load it. Catch it here instead.
+      - name: Syntax check
+        run: for f in src/*.js popup/*.js options/*.js test/*.js; do node --check "$f"; done
+      - name: Manifest names only files that exist
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            const files = [
+              m.background.service_worker, m.action.default_popup, m.options_ui.page,
+              ...Object.values(m.icons), ...Object.values(m.action.default_icon),
+              ...m.content_scripts.flatMap((c) => [...(c.js || []), ...(c.css || [])]),
+            ];
+            const missing = files.filter((f) => !fs.existsSync(f));
+            if (missing.length) { console.error("missing:", missing); process.exit(1); }
+            console.log(files.length, "files present");
+          '
+      - name: Tests
+        run: node test/run.js
