@@ -488,6 +488,161 @@ test("a clear from the settings page reaches a tab that was not open", () => {
   assert.strictEqual(page.store["xlf.hidden"], "");
 });
 
+/* ---------- the verdict, and its two re-scoring copies ---------- */
+
+console.log("\nverdicts");
+
+const scoring = (() => {
+  const s = vm.createContext({ console });
+  s.self = s;
+  vm.runInContext(read("src/scoring.js"), s);
+  return s.XLF;
+})();
+
+// A post as the API sends it, from a handful of knobs.
+function apiPost(o) {
+  const media = o.media ? [{ type: o.media }] : [];
+  const tweet = {
+    __typename: "Tweet",
+    rest_id: String(o.id),
+    views: { count: String(o.views) },
+    core: o.followers == null ? undefined
+      : { user_results: { result: { legacy: { followers_count: o.followers } } } },
+    card: o.card ? { legacy: { binding_values: [
+      { key: "title", value: { string_value: "A link card" } },
+    ] } } : undefined,
+    legacy: {
+      full_text: o.text,
+      favorite_count: o.likes,
+      bookmark_count: o.bookmarks,
+      extended_entities: { media },
+      in_reply_to_status_id_str: o.reply ? "1" : undefined,
+    },
+  };
+  if (!o.repost) return tweet;
+  return { __typename: "Tweet", rest_id: "9" + o.id,
+    legacy: { full_text: "RT @someone: …", favorite_count: 0, bookmark_count: 0,
+              retweeted_status_result: { result: tweet } } };
+}
+
+// Every combination of the signals the gates read, against every bar the
+// panel can set. Big enough that any gate missing from one copy shows up.
+function grid() {
+  const posts = [];
+  let id = 0;
+  for (const views of [0, 20000, 60000, 2000000])
+    for (const text of ["Introducing Orbit", "election night thoughts", "nice weather today"])
+      for (const media of [null, "video", "photo"])
+        for (const card of [false, true])
+          for (const flag of [null, "reply", "repost", "ad"])
+            for (const followers of [null, 5000, 500000])
+              for (const [likeRate, bookmarkRate] of [[0.003, 0.0002], [0.02, 0.003]]) {
+                posts.push({ id: ++id, views, text, media, card, followers,
+                  likes: Math.round(views * likeRate), bookmarks: Math.round(views * bookmarkRate),
+                  reply: flag === "reply", repost: flag === "repost", ad: flag === "ad" });
+              }
+  return posts;
+}
+
+const BARS = [
+  {}, { minViews: 0 }, { minViews: 1000000 }, { minLikeRate: 1 }, { minLikeRate: 0.5 },
+  { minBookmarkRate: 0.1 }, { maxFollowers: 10000 }, { requireLaunch: false },
+  { hideReposts: true }, { hideReplies: false }, { hideAds: false },
+  { minViews: 10000, maxFollowers: 10000, minLikeRate: 0.25, requireLaunch: false },
+  // Every gate at once, so a post failing several shows which one comes first.
+  { minViews: 10000, maxFollowers: 10000, minLikeRate: 1, minBookmarkRate: 0.1,
+    hideReposts: true },
+];
+
+// judge() and rejudge() name their reasons differently: one is a log line, the
+// other a bar label. The order they are reached in is what has to match.
+const SAME_REASON = {
+  ad: "ads", repost: "reposts", reply: "replies", noise: "muted topics",
+  "low views": "views", "low like rate": "like rate", "low bookmark rate": "bookmark rate",
+  "too many followers": "account size", "off-topic": "no launch signal", keep: "keep",
+};
+
+test("re-scoring a stored record reaches the verdict judging the post did", () => {
+  // The panel's forecast never sees a post, only the record of one, so a gate
+  // that judge() has and rejudge() lacks would make the panel promise posts
+  // the next reload does not deliver.
+  let n = 0;
+  for (const bar of BARS) {
+    const cfg = scoring.buildConfig(bar);
+    for (const o of grid()) {
+      const p = scoring.fromApi(apiPost(o), { promoted: o.ad });
+      const live = scoring.judge(p, cfg);
+      const again = scoring.rejudge(scoring.record(p, cfg), cfg);
+      assert.strictEqual(again.reason, SAME_REASON[live.reason],
+        `${JSON.stringify(bar)} on ${JSON.stringify(o)}: judge said ${live.reason}, ` +
+        `rejudge said ${again.reason}`);
+      n++;
+    }
+  }
+  assert.ok(n > 10000, "the grid is too small to mean anything");
+});
+
+test("content.js's copy of rejudge() agrees with scoring.js's", () => {
+  // content.js cannot load scoring.js (Chrome injects a file into one world
+  // only), so its rejudge() is a hand copy, with the same failure mode as the
+  // hand-copied defaults above.
+  const page = makePage({ pathname: "/home" });
+  const copy = vm.runInContext("rejudge", loadIsolated(page));
+  for (const bar of BARS) {
+    const cfg = scoring.buildConfig(bar);
+    for (const o of grid()) {
+      const r = scoring.record(scoring.fromApi(apiPost(o), { promoted: o.ad }), cfg);
+      const want = scoring.rejudge(r, cfg);
+      const got = copy(r, cfg);
+      assert.strictEqual(got.reason, want.reason,
+        `${JSON.stringify(bar)} on ${JSON.stringify(r)}: content.js said ${got.reason}`);
+    }
+  }
+});
+
+test("a repost is judged on the post it shares", () => {
+  const cfg = scoring.buildConfig({});
+  const p = scoring.fromApi(apiPost({ id: 5, views: 300000, text: "Introducing Orbit",
+    likes: 2400, bookmarks: 150, media: "video", repost: true }));
+  assert.strictEqual(p.id, "5", "the ledger would key the wrapper, not the post");
+  assert.strictEqual(p.views, 300000);
+  assert.ok(p.isRepost);
+  assert.strictEqual(scoring.judge(p, cfg).reason, "keep");
+  assert.strictEqual(scoring.judge(p, scoring.buildConfig({ hideReposts: true })).reason, "repost");
+});
+
+test("a long post is judged on its whole text, and a card on its title", () => {
+  const cfg = scoring.buildConfig({});
+  const long = apiPost({ id: 6, views: 90000, text: "A thread about my week…", likes: 0, bookmarks: 0 });
+  long.note_tweet = { note_tweet_results: { result: {
+    text: "A thread about my week. Then at the very end: introducing Orbit." } } };
+  assert.strictEqual(scoring.judge(scoring.fromApi(long), cfg).reason, "keep");
+
+  const card = apiPost({ id: 7, views: 90000, text: "look", likes: 0, bookmarks: 0, card: true });
+  card.card.legacy.binding_values[0].value.string_value = "Orbit is now available";
+  assert.strictEqual(scoring.judge(scoring.fromApi(card), cfg).reason, "keep");
+});
+
+test("an author whose follower count cannot be read is never dropped by the ceiling", () => {
+  const cfg = scoring.buildConfig({ maxFollowers: 1000 });
+  const unknown = scoring.fromApi(apiPost({ id: 8, views: 90000, text: "Introducing Orbit",
+    likes: 0, bookmarks: 0, followers: null }));
+  assert.strictEqual(unknown.followers, null);
+  assert.strictEqual(scoring.judge(unknown, cfg).reason, "keep");
+  const big = scoring.fromApi(apiPost({ id: 9, views: 90000, text: "Introducing Orbit",
+    likes: 0, bookmarks: 0, followers: 5000 }));
+  assert.strictEqual(scoring.judge(big, cfg).reason, "too many followers");
+});
+
+test("a post wrapped for visibility is unwrapped before it is judged", () => {
+  const inner = apiPost({ id: 10, views: 90000, text: "Introducing Orbit", likes: 0, bookmarks: 0 });
+  const p = scoring.fromApi({ __typename: "TweetWithVisibilityResults", tweet: inner });
+  assert.strictEqual(p.id, "10");
+  assert.strictEqual(p.views, 90000);
+  assert.strictEqual(scoring.fromApi({ __typename: "TweetTombstone" }), null,
+    "a tombstone has nothing to judge");
+});
+
 /* ---------- variety ---------- */
 
 console.log("\nrotation");
