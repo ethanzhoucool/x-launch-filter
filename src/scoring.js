@@ -85,6 +85,8 @@ self.XLF = (() => {
     "sign up", "get started", "v1", "v2", "v3", "built", "build",
     "building", "made", "it's called", "open sourced", "ships",
     "coding agent", "new app", "my app",
+    // Matched by substring before terms became whole words; kept on purpose.
+    "open sourcing", "my newest", "our newest",
   ];
 
   // Anything here is dropped before the numbers are even read.
@@ -109,14 +111,29 @@ self.XLF = (() => {
     "astrology", "zodiac", "horoscope", "onlyfans", "super bowl",
   ];
 
-  // Word-boundary the alphanumeric terms so "v1" does not match "v10"; leave
-  // phrases as plain substrings.
+  // Every term matches as whole words, so "v1" does not match "v10". Phrases
+  // used to be plain substrings, which fired them inside other words: "rt if"
+  // muted "start if", "series a" counted as a launch in "series and", "ship it"
+  // in "relationship itself", "now in" in "snow in". The last word may take a
+  // plural, or a boundary there would cost "new features" and "side projects" —
+  // and single words never had one, so "NFTs", "Democrats" and "missiles" got
+  // straight past the noise list. A space also matches a hyphen ("left-wing",
+  // "sign-up"), and an apostrophe matches the curly one phones type.
   function toMatcher(terms) {
     const clean = terms.map((t) => String(t).trim().toLowerCase()).filter(Boolean);
     if (!clean.length) return null;
     const parts = clean.map((t) => {
-      const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return /^[a-z0-9]+$/.test(t) ? `\\b${esc}\\b` : esc;
+      let p = t
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/['\u2018\u2019]/g, "['\\u2018\\u2019]")
+        .replace(/[\s-]+/g, "[\\s-]+");
+      // A term opening with a hyphen gets no \b to anchor it, and a leading
+      // [\s-]+ would rescan a long run of spaces from every position in it.
+      // One separator matches exactly the same posts.
+      if (p.startsWith("[\\s-]+")) p = "[\\s-]" + p.slice(6);
+      if (/^\w/.test(t)) p = "\\b" + p;
+      if (/\w$/.test(t)) p += "(?:e?s)?\\b";
+      return p;
     });
     try {
       return new RegExp(parts.join("|"), "i");
