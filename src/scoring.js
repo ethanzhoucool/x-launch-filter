@@ -127,6 +127,10 @@ self.XLF = (() => {
         .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
         .replace(/['\u2018\u2019]/g, "['\\u2018\\u2019]")
         .replace(/[\s-]+/g, "[\\s-]+");
+      // A term opening with a hyphen gets no \b to anchor it, and a leading
+      // [\s-]+ would rescan a long run of spaces from every position in it.
+      // One separator matches exactly the same posts.
+      if (p.startsWith("[\\s-]+")) p = "[\\s-]" + p.slice(6);
       if (/^\w/.test(t)) p = "\\b" + p;
       if (/\w$/.test(t)) p += "(?:e?s)?\\b";
       return p;

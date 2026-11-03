@@ -166,6 +166,8 @@ test("your own terms follow the same rules", () => {
   assert.ok(matched(cfg.includeRe, "three Figma plugins I made"));
   assert.ok(matched(cfg.includeRe, "my figma-plugin"));
   assert.strictEqual(matched(cfg.excludeRe, "rehiring the team"), null);
+  const dash = XLF.buildConfig({ extraInclude: "-dash" });
+  assert.ok(matched(dash.includeRe, "the re-dash build"));
   assert.ok(matched(cfg.excludeRe, "We're hiring"));
 });
 
